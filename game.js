@@ -1,13 +1,21 @@
 const gameplay = document.querySelector("#gameplay");
 const startScreen = document.querySelector(".start-screen");
 const playButton = document.querySelector(".play-button");
+const homeAnchorLayer = document.querySelector(".home-anchor-layer");
+const homeAnchorSpace = document.querySelector(".home-anchor-space");
+const homeAnchorVideos = [...document.querySelectorAll(".home-anchor-sprite, .home-anchor-backdrop")];
 const levelTitle = document.querySelector(".level-title");
 const cursor = document.querySelector(".cursor");
 const obstacleField = document.querySelector(".obstacle-field");
 const spiralField = document.querySelector(".spiral-field");
+const triangleTest = document.querySelector(".triangle-test");
 const gameOverScreen = document.querySelector(".game-over-screen");
 const levelCompleteScreen = document.querySelector(".level-complete-screen");
 const scoreLine = document.querySelector(".score-line");
+const againButton = document.querySelector(".again-button");
+const scoreForm = document.querySelector(".score-form");
+const playerNameInput = document.querySelector(".player-name-input");
+const leaderboardList = document.querySelector(".leaderboard-list");
 const minimumMovesValue = document.querySelector(".minimum-moves-value");
 const playerMovesValue = document.querySelector(".player-moves-value");
 const closeCallMessage = document.querySelector(".close-call-message");
@@ -28,8 +36,10 @@ const audioVolumes = {
   playLoop: 0.6,
   lostLoop: 0.72,
 };
+const supabaseUrl = "https://jurpddzoprhuboxyghau.supabase.co";
+const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp1cnBkZHpvcHJodWJveHlnaGF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NDcxNzUsImV4cCI6MjA5MzQyMzE3NX0.gAQAYN5Pizs5Hiet9hviGQ16Ph1MDif-uDs1mhFpJvA";
 const freezeOffsets = [0.2, 0.2, 0.02];
-const introPlaybackRate = 2;
+const introPlaybackRate = 3;
 const baseGameOverSpriteCount = 50;
 const gameOverSpriteGrowth = 1.0466;
 const obstacleSize = 16;
@@ -48,6 +58,8 @@ const obstacleColors = [
 const triangleRotationRpm = 5;
 const triangleRotationRadiansPerSecond = triangleRotationRpm * 2 * Math.PI / 60;
 const lineFadeDuration = 1500;
+const gameOverLineFadeDuration = lineFadeDuration / 2;
+const levelTransitionDuration = 250;
 const rotationStartDelay = 100;
 const settleDuration = 1170;
 const levelTitleDuration = 1000;
@@ -97,6 +109,18 @@ let webAudioLoopStartedAt = 0;
 let webAudioLoopOffset = 0;
 let currentLevel = 1;
 let closeCallTimer = null;
+let pendingCloseCall = false;
+let finalScore = 0;
+let totalScore = 0;
+let scoreSubmitted = false;
+let supabaseClient = null;
+let audioOutputScale = 1;
+let elementFadeFrame = null;
+let triangleReady = false;
+let restartTimer = null;
+let gameOverCleanupStarted = false;
+let levelTransitioning = false;
+const collisionTestKeys = new Set();
 
 Object.values(audioElements).forEach((track) => {
   track.volume = 0.6;
@@ -113,6 +137,62 @@ function playElementAudio(track) {
   playback?.catch(() => {});
 }
 
+function elementVolumeFor(track) {
+  return track === audioElements.lostLoop
+    ? audioVolumes.lostLoop
+    : audioVolumes.playLoop;
+}
+
+function setElementAudioScale(scale) {
+  Object.values(audioElements).forEach((track) => {
+    track.volume = elementVolumeFor(track) * scale;
+  });
+}
+
+function setWebAudioVolume(name, scale) {
+  if (!audioContext || !audioGain) {
+    return;
+  }
+
+  audioGain.gain.cancelScheduledValues(audioContext.currentTime);
+  audioGain.gain.setValueAtTime(audioVolumes[name] * scale, audioContext.currentTime);
+}
+
+function fadeElementAudioScale(startScale, targetScale, duration) {
+  window.cancelAnimationFrame(elementFadeFrame);
+
+  const startTime = performance.now();
+
+  function tick(now) {
+    const progress = duration > 0 ? clamp((now - startTime) / duration, 0, 1) : 1;
+    const nextScale = startScale + (targetScale - startScale) * progress;
+
+    setElementAudioScale(nextScale);
+
+    if (progress < 1) {
+      elementFadeFrame = window.requestAnimationFrame(tick);
+    }
+  }
+
+  elementFadeFrame = window.requestAnimationFrame(tick);
+}
+
+function fadeAudioOutput(targetScale, duration = 2000) {
+  const startScale = audioOutputScale;
+
+  audioOutputScale = targetScale;
+
+  if (activeAudioMode === "web" && audioContext && audioGain) {
+    const now = audioContext.currentTime;
+
+    audioGain.gain.cancelScheduledValues(now);
+    audioGain.gain.setValueAtTime(audioVolumes[webAudioLoopName] * startScale, now);
+    audioGain.gain.linearRampToValueAtTime(audioVolumes[webAudioLoopName] * targetScale, now + duration / 1000);
+  }
+
+  fadeElementAudioScale(startScale, targetScale, duration);
+}
+
 function ensureAudioContext() {
   if (!audioContext) {
     const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
@@ -123,7 +203,7 @@ function ensureAudioContext() {
 
     audioContext = new AudioContextConstructor();
     audioGain = audioContext.createGain();
-    audioGain.gain.value = audioVolumes.playLoop;
+    audioGain.gain.value = audioVolumes.playLoop * audioOutputScale;
     audioGain.connect(audioContext.destination);
   }
 
@@ -181,7 +261,7 @@ function startWebAudioLoop(name, offset = 0) {
   const marker = buffer.duration > 0 ? offset % buffer.duration : 0;
 
   stopWebAudioLoop();
-  audioGain.gain.setValueAtTime(audioVolumes[name], context.currentTime);
+  setWebAudioVolume(name, audioOutputScale);
   source.buffer = buffer;
   source.loop = true;
   source.connect(audioGain);
@@ -211,6 +291,7 @@ function switchAudio(fromTrack, toTrack, time) {
     : Math.min(time, duration || time);
 
   toTrack.currentTime = marker;
+  toTrack.volume = elementVolumeFor(toTrack) * audioOutputScale;
   activeAudio = toTrack;
   playElementAudio(toTrack);
 }
@@ -239,6 +320,7 @@ async function startPlayAudio() {
   activeAudioMode = "element";
   activeAudio = audioElements.playLoop;
   audioElements.playLoop.currentTime = 0;
+  audioElements.playLoop.volume = audioVolumes.playLoop * audioOutputScale;
   playElementAudio(audioElements.playLoop);
 }
 
@@ -255,6 +337,34 @@ function switchToLostAudio() {
   }
 
   switchAudio(activeAudio, audioElements.lostLoop, activeAudio.currentTime || 0);
+}
+
+function switchToPlayAudio() {
+  if (!audioStarted || !lostAudioStarted) {
+    return;
+  }
+
+  lostAudioStarted = false;
+
+  if (activeAudioMode === "web" && audioBuffers) {
+    startWebAudioLoop("playLoop", currentWebAudioMarker());
+    return;
+  }
+
+  switchAudio(audioElements.lostLoop, audioElements.playLoop, audioElements.lostLoop.currentTime || 0);
+}
+
+function handleAudioVisibilityChange() {
+  if (document.hidden) {
+    fadeAudioOutput(0);
+    return;
+  }
+
+  if (audioContext?.state === "suspended") {
+    audioContext.resume().catch(() => {});
+  }
+
+  fadeAudioOutput(1);
 }
 
 function cssPixelValue(name) {
@@ -307,6 +417,38 @@ function centerCursor() {
   moveCursor((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2);
 }
 
+function freezeHomeAnchorSprite() {
+  homeAnchorVideos.forEach((video) => {
+    function freeze() {
+      const duration = Number.isFinite(video.duration) && video.duration > 0
+        ? video.duration
+        : 1.2;
+
+      video.pause();
+      video.currentTime = Math.max(0, duration - 0.2);
+    }
+
+    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      freeze();
+      return;
+    }
+
+    video.addEventListener("loadedmetadata", freeze, { once: true });
+  });
+}
+
+function positionHomeAnchorBackdrop() {
+  if (!homeAnchorLayer || !homeAnchorSpace || startScreen.classList.contains("hidden")) {
+    return;
+  }
+
+  const screenRect = startScreen.getBoundingClientRect();
+  const anchorRect = homeAnchorSpace.getBoundingClientRect();
+
+  homeAnchorLayer.style.left = `${anchorRect.left - screenRect.left + anchorRect.width / 2}px`;
+  homeAnchorLayer.style.top = `${anchorRect.top - screenRect.top}px`;
+}
+
 function eventClientPoint(event) {
   const touch = event.changedTouches?.[0] || event.touches?.[0];
 
@@ -329,6 +471,10 @@ function moveCursorToInput(event) {
     return;
   }
 
+  if (eventIsTouch(event)) {
+    gameplay.classList.add("touch-input");
+  }
+
   const point = eventClientPoint(event);
   const bounds = playableBounds();
   moveCursor(point.x - bounds.rect.left, point.y - bounds.rect.top);
@@ -336,6 +482,23 @@ function moveCursorToInput(event) {
 
 function eventIsTouch(event) {
   return event.pointerType === "touch" || event.type.startsWith("touch");
+}
+
+function handleGameplayAction(event) {
+  if (!gameStarted || gameOver || levelComplete) {
+    return;
+  }
+
+  if (draggedNode || suppressNextGameplayClick) {
+    suppressNextGameplayClick = false;
+    return;
+  }
+
+  if (event) {
+    moveCursorToInput(event);
+  }
+
+  gameplay.classList.add("active");
 }
 
 function randomBetween(min, max) {
@@ -348,6 +511,16 @@ function gameOverSpriteCountForLevel(level) {
 
 function captureSpriteCountForLevel(level) {
   return baseSpiralCount + Math.floor(level / 6);
+}
+
+function minimumMovesForLevel(level) {
+  const baseMoves = levelOneMinimumMoves ?? Math.round(randomBetween(levelOneMinimumMoveLow, levelOneMinimumMoveHigh + 1));
+
+  return Math.round(baseMoves * Math.pow(gameOverSpriteGrowth, level - 1));
+}
+
+function collisionsDisabled() {
+  return collisionTestKeys.has("t") && collisionTestKeys.has("w");
 }
 
 function createIrregularPolygon(sides) {
@@ -547,8 +720,19 @@ function triggerGameOver() {
   gameOver = true;
   rotationPaused = true;
   triangleSettling = false;
+  triangleReady = false;
+  gameplay.classList.add("game-ended");
+  gameplay.classList.remove("active");
+  if (document.pointerLockElement === gameplay) {
+    document.exitPointerLock();
+  }
   window.clearTimeout(closeCallTimer);
   closeCallMessage.classList.remove("visible");
+  finalScore = totalScore;
+  scoreSubmitted = false;
+  scoreForm.hidden = false;
+  playerNameInput.value = "";
+  leaderboardList.replaceChildren();
   window.clearTimeout(settleTimer);
   assetNodes.forEach((node) => node.classList.remove("settling"));
   draggedNode?.classList.remove("dragging");
@@ -559,6 +743,11 @@ function triggerGameOver() {
 
 function showCloseCall() {
   if (gameOver || levelComplete) {
+    return;
+  }
+
+  if (triangleSettling) {
+    pendingCloseCall = true;
     return;
   }
 
@@ -587,7 +776,7 @@ function fadeOutTriangleLinks() {
       { opacity: 0 },
     ],
     {
-      duration: explosionDuration,
+      duration: gameOverLineFadeDuration,
       easing: "linear",
       fill: "forwards",
     },
@@ -597,6 +786,107 @@ function fadeOutTriangleLinks() {
     triangleLinksLayer.style.opacity = "0";
     triangleLinksLayer.classList.remove("visible");
   }).catch(() => {});
+}
+
+function fadeAndClearRemainingSprites(duration = 500) {
+  if (duration === 500 && gameOverCleanupStarted) {
+    return;
+  }
+
+  if (duration === 500) {
+    gameOverCleanupStarted = true;
+  }
+
+  [obstacleField, spiralField].forEach((field) => {
+    field.style.pointerEvents = "none";
+
+    if (!field.animate) {
+      field.replaceChildren();
+      field.classList.remove("visible");
+      field.style.opacity = "0";
+      return;
+    }
+
+    const fade = field.animate(
+      [
+        { opacity: Number.parseFloat(getComputedStyle(field).opacity) || 1 },
+        { opacity: 0 },
+      ],
+      {
+        duration,
+        easing: "ease",
+        fill: "forwards",
+      },
+    );
+
+    fade.finished.then(() => {
+      field.replaceChildren();
+      field.classList.remove("visible");
+      field.style.opacity = "0";
+    }).catch(() => {
+      field.replaceChildren();
+      field.classList.remove("visible");
+      field.style.opacity = "0";
+    });
+  });
+}
+
+function fadeElementToZero(element, duration) {
+  if (!element.animate) {
+    element.style.opacity = "0";
+    return;
+  }
+
+  const fade = element.animate(
+    [
+      { opacity: Number.parseFloat(getComputedStyle(element).opacity) || 1 },
+      { opacity: 0 },
+    ],
+    {
+      duration,
+      easing: "ease",
+      fill: "forwards",
+    },
+  );
+
+  fade.finished.then(() => {
+    element.style.opacity = "0";
+  }).catch(() => {
+    element.style.opacity = "0";
+  });
+}
+
+function resetElementFadeState(element) {
+  element.getAnimations?.().forEach((animation) => animation.cancel());
+  element.style.opacity = "";
+}
+
+function resetLevelVisualLayers() {
+  [triangleTest, obstacleField, spiralField, triangleLinksLayer, closeCallMessage].forEach(resetElementFadeState);
+  obstacleField.classList.remove("visible");
+  spiralField.classList.remove("visible");
+  triangleLinksLayer.classList.remove("visible");
+  closeCallMessage.classList.remove("visible");
+}
+
+function clearGameplayObjects() {
+  obstacleField.replaceChildren();
+  spiralField.replaceChildren();
+  pendingCapturedSpirals.clear();
+  draggedNode?.classList.remove("dragging");
+  draggedNode = null;
+  draggedHandle = null;
+  triangleSettling = false;
+  triangleReady = false;
+  rotationPaused = true;
+  window.clearTimeout(settleTimer);
+  window.clearTimeout(closeCallTimer);
+  closeCallMessage.classList.remove("visible");
+}
+
+function showGameOverScreen() {
+  gameOverScreen.classList.add("visible");
+  fadeAndClearRemainingSprites();
 }
 
 function playExplosionVideo(video) {
@@ -629,18 +919,96 @@ function playExplosionVideo(video) {
 
 function playGameOverExplosion() {
   fadeOutTriangleLinks().then(() => {
-    gameOverScreen.classList.add("visible");
+    showGameOverScreen();
   });
 
   triangleVideos.forEach(playExplosionVideo);
 
   window.setTimeout(() => {
-    gameOverScreen.classList.add("visible");
+    showGameOverScreen();
   }, explosionDuration);
 }
 
+function resetTriangleVideos() {
+  triangleVideos.forEach((video) => {
+    const node = video.closest(".asset-node");
+
+    video.pause();
+    video.src = "assets/timeline-2.mp4";
+    video.loop = false;
+    video.playbackRate = introPlaybackRate;
+    video.classList.remove("active", "frozen", "exploding");
+    node?.classList.remove("mask-tight", "dragging", "settling");
+    node?.style.removeProperty("--mask-shrink-duration");
+    node?.style.removeProperty("left");
+    node?.style.removeProperty("top");
+  });
+
+  triangleLinksLayer.classList.remove("visible");
+  triangleLinksLayer.style.opacity = "";
+}
+
+function resetTriangleToCenter() {
+  resetTriangleVideos();
+  assetNodes.forEach((node) => {
+    node.style.removeProperty("left");
+    node.style.removeProperty("top");
+  });
+  centerCursor();
+  updateTriangleLinks();
+}
+
+function clearAndStartLevel(nextLevel) {
+  currentLevel = nextLevel;
+  levelComplete = false;
+  gameStarted = false;
+  gameOver = false;
+  triangleReady = false;
+  levelTransitioning = false;
+  gameOverCleanupStarted = false;
+  pendingCloseCall = false;
+  playerMoves = 0;
+  window.halcyonPlayerMoves = playerMoves;
+  levelCompleteScreen.classList.remove("visible");
+  resetLevelVisualLayers();
+  clearGameplayObjects();
+  resetTriangleToCenter();
+  startGame();
+}
+
+function restartGame(event) {
+  event?.preventDefault();
+
+  if (!gameOver && !levelComplete) {
+    return;
+  }
+
+  window.clearTimeout(restartTimer);
+  switchToPlayAudio();
+  gameOver = false;
+  levelComplete = false;
+  gameStarted = false;
+  lostAudioStarted = false;
+  currentLevel = 1;
+  levelOneMinimumMoves = null;
+  playerMoves = 0;
+  totalScore = 0;
+  finalScore = 0;
+  levelTransitioning = true;
+  triangleReady = false;
+  gameplay.classList.remove("game-ended");
+  pendingCloseCall = false;
+  gameOverScreen.classList.remove("visible");
+  levelCompleteScreen.classList.remove("visible");
+  fadeAndClearRemainingSprites(levelTransitionDuration);
+  fadeElementToZero(triangleTest, levelTransitionDuration);
+  restartTimer = window.setTimeout(() => {
+    clearAndStartLevel(1);
+  }, levelTransitionDuration);
+}
+
 function checkObstacleCollisions(points = assetNodes.map(nodePoint)) {
-  if (gameOver) {
+  if (gameOver || levelComplete || levelTransitioning || collisionsDisabled()) {
     return;
   }
 
@@ -685,16 +1053,97 @@ function consumeSpiral(sprite) {
 }
 
 function levelScore() {
-  if (!levelOneMinimumMoves || playerMoves <= 0) {
+  const minimumMoves = minimumMovesForLevel(currentLevel);
+
+  if (!minimumMoves || playerMoves <= 0) {
     return 0;
   }
 
-  return Math.floor(levelOneMinimumMoves / playerMoves * 100);
+  return Math.floor(minimumMoves / playerMoves * 100);
 }
 
-function updateMoveHud() {
-  minimumMovesValue.textContent = levelOneMinimumMoves ?? "?";
-  playerMovesValue.textContent = playerMoves;
+function highScoreClient() {
+  if (supabaseClient) {
+    return supabaseClient;
+  }
+
+  if (!window.supabase?.createClient) {
+    return null;
+  }
+
+  supabaseClient = window.supabase.createClient(supabaseUrl, supabaseKey);
+  return supabaseClient;
+}
+
+async function submitHighScore(playerName, score) {
+  const client = highScoreClient();
+
+  if (!client) {
+    throw new Error("supabase unavailable");
+  }
+
+  const name = (playerName || "").trim().slice(0, 20) || "Anonymous";
+  const { error } = await client
+    .from("high_scores")
+    .insert({
+      player_name: name,
+      score: Math.trunc(score),
+    });
+
+  if (error) {
+    throw error;
+  }
+}
+
+async function fetchTopThreeHighScores() {
+  const client = highScoreClient();
+
+  if (!client) {
+    throw new Error("supabase unavailable");
+  }
+
+  const { data, error } = await client
+    .from("high_scores")
+    .select("player_name, score, created_at")
+    .order("score", { ascending: false })
+    .order("created_at", { ascending: true })
+    .limit(3);
+
+  if (error) {
+    throw error;
+  }
+
+  return data || [];
+}
+
+function renderGameOverLeaderboard(scores) {
+  leaderboardList.replaceChildren();
+
+  if (!scores) {
+    const item = document.createElement("li");
+
+    item.textContent = "Leaderboard unavailable.";
+    leaderboardList.appendChild(item);
+    return;
+  }
+
+  scores.forEach((score) => {
+    const item = document.createElement("li");
+    const name = (score.player_name || "Anonymous").trim().slice(0, 20) || "Anonymous";
+
+    item.textContent = `${name} — ${Math.trunc(score.score)}`;
+    leaderboardList.appendChild(item);
+  });
+}
+
+function updateHud() {
+  if (minimumMovesValue) {
+    minimumMovesValue.textContent = minimumMovesForLevel(currentLevel);
+  }
+
+  if (playerMovesValue) {
+    playerMovesValue.textContent = playerMoves;
+  }
 }
 
 function checkLevelComplete() {
@@ -709,17 +1158,32 @@ function checkLevelComplete() {
   }
 
   levelComplete = true;
+  levelTransitioning = true;
   rotationPaused = true;
   triangleSettling = false;
+  triangleReady = false;
   window.clearTimeout(closeCallTimer);
   closeCallMessage.classList.remove("visible");
   window.clearTimeout(settleTimer);
-  updateMoveHud();
-  scoreLine.textContent = `score ${levelScore()}`;
-  levelCompleteScreen.classList.add("visible");
+  const earnedScore = levelScore();
+
+  totalScore += earnedScore;
+  finalScore = totalScore;
+  updateHud();
+  scoreLine.textContent = `score ${totalScore}`;
+  fadeAndClearRemainingSprites(levelTransitionDuration);
+  fadeElementToZero(triangleTest, levelTransitionDuration);
+  fadeElementToZero(closeCallMessage, levelTransitionDuration);
+  window.setTimeout(() => {
+    clearAndStartLevel(currentLevel + 1);
+  }, levelTransitionDuration);
 }
 
 function checkSpiralCollisions(points = assetNodes.map(nodePoint)) {
+  if (levelComplete || levelTransitioning || collisionsDisabled() || draggedNode || !triangleReady) {
+    return;
+  }
+
   const sprites = [...spiralField.querySelectorAll(".spiral-sprite:not(.consumed)")];
 
   if (sprites.length === 0) {
@@ -744,6 +1208,11 @@ function checkSpiralCollisions(points = assetNodes.map(nodePoint)) {
 }
 
 function consumePendingSpirals() {
+  if (collisionsDisabled()) {
+    pendingCapturedSpirals.clear();
+    return;
+  }
+
   pendingCapturedSpirals.forEach((sprite) => {
     consumeSpiral(sprite);
   });
@@ -771,6 +1240,10 @@ function constrainAssetPoint(node, x, y) {
   const collisionRadius = anchorRadius();
   let nextX = clamp(x, boundsRadius, gameplay.clientWidth - boundsRadius);
   let nextY = clamp(y, boundsRadius, gameplay.clientHeight - boundsRadius);
+
+  if (collisionsDisabled()) {
+    return { x: nextX, y: nextY };
+  }
 
   for (let pass = 0; pass < 2; pass += 1) {
     assetNodes.forEach((otherNode) => {
@@ -1357,7 +1830,12 @@ function resumeRotationAfterSettle() {
   settleTimer = window.setTimeout(() => {
     assetNodes.forEach((node) => node.classList.remove("settling"));
     triangleSettling = false;
-    consumePendingSpirals();
+    triangleReady = true;
+    checkSpiralCollisions();
+    if (pendingCloseCall) {
+      pendingCloseCall = false;
+      showCloseCall();
+    }
 
     if (!draggedNode && !gameOver && !levelComplete) {
       rotationPaused = false;
@@ -1514,7 +1992,7 @@ function updateTriangleCenter(points = assetNodes.map(nodePoint)) {
 }
 
 function startAssetDrag(event) {
-  if (draggedNode || triangleSettling || levelComplete || gameOver) {
+  if (!triangleReady || draggedNode || triangleSettling || levelComplete || gameOver) {
     return;
   }
 
@@ -1533,6 +2011,7 @@ function startAssetDrag(event) {
   }
   suppressNextGameplayClick = true;
   rotationPaused = true;
+  triangleReady = false;
   lastRotationTime = null;
   dragStartPoints = assetNodes.map(nodePoint);
   dragStartSideLength = baseTriangleSideLength || sideLengthFrom(dragStartPoints);
@@ -1555,7 +2034,7 @@ function stopAssetDrag() {
   draggedHandle = null;
   playerMoves += 1;
   window.halcyonPlayerMoves = playerMoves;
-  updateMoveHud();
+  updateHud();
   triangleSettling = true;
   settleTriangleFromHypotenuse(releasedNode);
   dragStartPoints = null;
@@ -1628,11 +2107,13 @@ function playTriangleVideo(index) {
       legsFade.finished.then(() => {
         window.setTimeout(() => {
           if (!gameOver) {
+            triangleReady = true;
             rotationPaused = false;
           }
         }, rotationStartDelay);
       }).catch(() => {
         if (!gameOver) {
+          triangleReady = true;
           rotationPaused = false;
         }
       });
@@ -1686,6 +2167,7 @@ function startTriangleTest() {
 }
 
 function showLevelTitle() {
+  levelTitle.textContent = `level ${currentLevel}`;
   levelTitle.classList.remove("showing");
   levelTitle.offsetWidth;
   levelTitle.classList.add("showing");
@@ -1704,24 +2186,36 @@ async function startGame(event) {
   }
 
   event?.preventDefault();
+  window.clearTimeout(restartTimer);
   gameStarted = true;
   playerMoves = 0;
   levelComplete = false;
   triangleSettling = false;
+  triangleReady = false;
+  gameOverCleanupStarted = false;
+  scoreSubmitted = false;
   pendingCapturedSpirals.clear();
+  pendingCloseCall = false;
+  gameOverScreen.classList.remove("visible");
+  levelCompleteScreen.classList.remove("visible");
+  resetLevelVisualLayers();
   window.currentHalcyonLevel = currentLevel;
   window.halcyonPlayerMoves = playerMoves;
   startScreen.classList.add("hidden");
+  gameplay.classList.remove("game-ended");
   gameplay.classList.add("started", "active");
   baseTriangleSideLength = sideLengthFrom(assetNodes.map(nodePoint));
   moveCursorToInput(event);
   startPlayAudio();
   await showLevelTitle();
+  if (currentLevel === 1 || levelOneMinimumMoves === null) {
+    levelOneMinimumMoves = Math.floor(randomBetween(levelOneMinimumMoveLow, levelOneMinimumMoveHigh + 1));
+    window.halcyonLevelOneMinimumMoves = levelOneMinimumMoves;
+  }
   generateObstacles();
   generateSpiralSprite();
-  levelOneMinimumMoves = Math.floor(randomBetween(levelOneMinimumMoveLow, levelOneMinimumMoveHigh + 1));
-  window.halcyonLevelOneMinimumMoves = levelOneMinimumMoves;
-  updateMoveHud();
+  window.halcyonLevelMinimumMoves = minimumMovesForLevel(currentLevel);
+  updateHud();
   updateTriangleLinks();
   requestAnimationFrame(() => {
     updateTriangleLinks();
@@ -1735,6 +2229,10 @@ gameplay.addEventListener("pointermove", (event) => {
     return;
   }
 
+  if (eventIsTouch(event)) {
+    event.preventDefault();
+  }
+
   if (draggedNode) {
     moveAssetNodeFromInput(draggedNode, event);
   }
@@ -1744,7 +2242,9 @@ gameplay.addEventListener("pointermove", (event) => {
     return;
   }
 
-  moveCursorToInput(event);
+  if (!eventIsTouch(event)) {
+    moveCursorToInput(event);
+  }
 });
 
 gameplay.addEventListener("touchmove", (event) => {
@@ -1761,27 +2261,43 @@ gameplay.addEventListener("touchmove", (event) => {
   moveCursorToInput(event);
 }, { passive: false });
 
-gameplay.addEventListener("click", () => {
-  if (!gameStarted || gameOver || levelComplete) {
-    return;
+gameplay.addEventListener("pointerup", (event) => {
+  if (eventIsTouch(event)) {
+    event.preventDefault();
+    handleGameplayAction(event);
   }
+});
 
-  if (draggedNode || suppressNextGameplayClick) {
-    suppressNextGameplayClick = false;
-    return;
-  }
-
-  gameplay.classList.add("active");
+gameplay.addEventListener("click", (event) => {
+  handleGameplayAction(event);
 });
 
 document.addEventListener("pointerlockchange", () => {
   gameplay.classList.toggle("active", document.pointerLockElement === gameplay);
 });
 
+document.addEventListener("keydown", (event) => {
+  const key = event.key.toLowerCase();
+
+  if (key === "t" || key === "w") {
+    collisionTestKeys.add(key);
+  }
+});
+
+document.addEventListener("keyup", (event) => {
+  const key = event.key.toLowerCase();
+
+  if (key === "t" || key === "w") {
+    collisionTestKeys.delete(key);
+  }
+});
+
 window.addEventListener("resize", () => {
   centerCursor();
   updateTriangleLinks();
+  positionHomeAnchorBackdrop();
 });
+document.addEventListener("visibilitychange", handleAudioVisibilityChange);
 assetNodes.forEach((node) => {
   const handle = node.querySelector(".asset-handle");
 
@@ -1792,8 +2308,31 @@ playButton.addEventListener("click", startGame);
 playButton.addEventListener("pointerup", startGame);
 playButton.addEventListener("touchstart", startGame, { passive: false });
 playButton.addEventListener("touchend", startGame, { passive: false });
+againButton.addEventListener("click", restartGame);
+againButton.addEventListener("pointerup", restartGame);
+againButton.addEventListener("touchstart", restartGame, { passive: false });
+scoreForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  if (scoreSubmitted) {
+    return;
+  }
+
+  scoreSubmitted = true;
+
+  try {
+    await submitHighScore(playerNameInput.value, finalScore);
+    renderGameOverLeaderboard(await fetchTopThreeHighScores());
+    scoreForm.hidden = true;
+  } catch {
+    renderGameOverLeaderboard(null);
+  }
+});
 document.addEventListener("pointerup", stopAssetDrag);
 document.addEventListener("touchend", stopAssetDrag);
 document.addEventListener("touchcancel", stopAssetDrag);
+freezeHomeAnchorSprite();
+positionHomeAnchorBackdrop();
+requestAnimationFrame(positionHomeAnchorBackdrop);
 centerCursor();
 updateTriangleLinks();

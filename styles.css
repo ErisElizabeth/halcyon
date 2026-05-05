@@ -45,7 +45,8 @@ body {
   background: var(--background);
 }
 
-.gameplay:not(.started) {
+.gameplay:not(.started),
+.gameplay.game-ended {
   cursor: auto;
 }
 
@@ -54,12 +55,11 @@ body {
   inset: 0;
   z-index: 6;
   display: grid;
-  place-content: center;
-  gap: 1rem;
-  justify-items: center;
+  place-items: center;
   background: var(--background);
   color: #D8DDD9;
   transition: opacity 0.35s ease;
+  padding: clamp(0.75rem, 3vmin, 1.5rem);
 }
 
 .start-screen.hidden {
@@ -67,13 +67,114 @@ body {
   pointer-events: none;
 }
 
+.start-stack {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  justify-items: center;
+  gap: clamp(0.38rem, 1.25vmin, 0.75rem);
+}
+
 .start-screen h1 {
   margin: 0;
   color: #D8DDD9;
   font: inherit;
-  font-size: 1.8rem;
+  font-size: clamp(2rem, 6vmin, 3.2rem);
   font-weight: 600;
   letter-spacing: 0;
+}
+
+.start-guide-item {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: clamp(0.25rem, 1vmin, 0.45rem);
+  pointer-events: none;
+}
+
+.start-guide-label {
+  color: #D8DDD9;
+  font-size: clamp(0.82rem, 2.3vmin, 1rem);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-align: center;
+  opacity: 0.78;
+}
+
+.home-collect-sprite,
+.home-obstacle-sprite,
+.home-anchor-sprite,
+.home-anchor-space {
+  width: clamp(18px, 4.2vmin, 26px);
+  height: clamp(18px, 4.2vmin, 26px);
+  pointer-events: none;
+}
+
+.home-collect-sprite {
+  pointer-events: none;
+  filter:
+    drop-shadow(0 0 5px rgba(57, 255, 136, 0.95))
+    drop-shadow(0 2px 2px rgba(0, 0, 0, 0.82));
+  animation: spiral-spin 1.4s linear infinite;
+}
+
+.home-collect-sprite svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.home-obstacle-sprite {
+  background:
+    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.38), transparent 24%),
+    linear-gradient(#3434ff, rgba(255, 255, 255, 0.22), transparent 38%, rgba(0, 0, 68, 0.52)),
+    #0000D1;
+  clip-path: polygon(50% 0%, 82% 13%, 100% 46%, 79% 86%, 41% 100%, 10% 73%, 0% 34%, 21% 8%);
+  pointer-events: none;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.32) inset,
+    0 -2px 2px rgba(0, 0, 50, 0.82) inset,
+    0 0 9px rgba(0, 56, 255, 0.7),
+    0 4px 8px rgba(0, 0, 0, 0.8);
+}
+
+.home-anchor-backdrop,
+.home-anchor-sprite {
+  object-fit: contain;
+  opacity: 1;
+  transform-origin: center;
+  mask-image: radial-gradient(
+    circle at 50% 50%,
+    #000 0 var(--anchor-hit-radius),
+    transparent calc(var(--anchor-hit-radius) * 1.45)
+  );
+  -webkit-mask-image: radial-gradient(
+    circle at 50% 50%,
+    #000 0 var(--anchor-hit-radius),
+    transparent calc(var(--anchor-hit-radius) * 1.45)
+  );
+  filter:
+    drop-shadow(0 0 5px rgba(255, 47, 47, 0.65))
+    drop-shadow(0 2px 2px rgba(0, 0, 0, 0.82));
+}
+
+.home-anchor-layer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  width: clamp(18px, 4.2vmin, 26px);
+  height: clamp(18px, 4.2vmin, 26px);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.home-anchor-backdrop {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scale(8.42);
 }
 
 .level-title {
@@ -99,7 +200,7 @@ body {
   min-width: 7.5rem;
   min-height: 3rem;
   border: 0;
-  border-radius: 0;
+  border-radius: 0.65rem;
   background: #2F3432;
   color: #D8DDD9;
   font: inherit;
@@ -108,6 +209,9 @@ body {
   letter-spacing: 0;
   cursor: pointer;
   touch-action: manipulation;
+  display: inline-grid;
+  place-items: center;
+  text-align: center;
 }
 
 .play-button:hover,
@@ -381,7 +485,22 @@ body {
   opacity: 1;
 }
 
+.gameplay.touch-input .cursor {
+  opacity: 0;
+}
+
+.gameplay.game-ended .cursor {
+  opacity: 0;
+}
+
+@media (pointer: coarse) {
+  .cursor {
+    display: none;
+  }
+}
+
 .hint {
+  display: none;
   position: absolute;
   left: 50%;
   top: 50%;
@@ -400,6 +519,7 @@ body {
 }
 
 .move-hud {
+  display: none;
   position: absolute;
   top: 1rem;
   right: 1rem;
@@ -453,6 +573,69 @@ body {
   transition: opacity 0.35s ease;
 }
 
+.game-over-screen {
+  align-content: center;
+  gap: 0.75rem;
+}
+
+.again-button,
+.score-submit-button {
+  border: 0;
+  border-radius: 0.65rem;
+  background: #2F3432;
+  color: #D8DDD9;
+  font: inherit;
+  font-size: clamp(1.4rem, 4.5vmin, 3rem);
+  font-weight: 600;
+  letter-spacing: 0;
+  padding: 0.55rem 1rem;
+  touch-action: manipulation;
+  display: inline-grid;
+  place-items: center;
+  text-align: center;
+  cursor: pointer;
+}
+
+.again-button:hover,
+.again-button:focus-visible,
+.score-submit-button:hover,
+.score-submit-button:focus-visible {
+  background: #3E4642;
+  outline: none;
+}
+
+.score-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.player-name-input {
+  width: min(12rem, 48vw);
+  border: 1px solid rgba(216, 221, 217, 0.38);
+  border-radius: 0.65rem;
+  background: rgba(47, 52, 50, 0.82);
+  color: #D8DDD9;
+  font: inherit;
+  font-size: 1rem;
+  letter-spacing: 0;
+  padding: 0.55rem 0.7rem;
+}
+
+.score-submit-button {
+  font-size: 1rem;
+}
+
+.leaderboard-list {
+  min-height: 3.8rem;
+  margin: 0.25rem 0 0;
+  padding-left: 1.5rem;
+  color: #D8DDD9;
+  font-size: clamp(0.95rem, 2.5vmin, 1.4rem);
+  line-height: 1.45;
+  text-align: left;
+}
+
 .level-complete-screen {
   align-content: center;
   gap: 0.75rem;
@@ -466,6 +649,10 @@ body {
 .game-over-screen.visible,
 .level-complete-screen.visible {
   opacity: 1;
+}
+
+.game-over-screen.visible {
+  pointer-events: auto;
 }
 
 @keyframes asset-spin {

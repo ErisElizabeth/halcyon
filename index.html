@@ -47,7 +47,7 @@
         margin: 0;
         color: #D8DDD9;
         font: inherit;
-        font-size: 1.8rem;
+        font-size: 2.4rem;
         font-weight: 600;
         letter-spacing: 0;
       }
@@ -56,7 +56,7 @@
         min-width: 7.5rem;
         min-height: 3rem;
         border: 0;
-        border-radius: 0;
+        border-radius: 0.65rem;
         background: #2F3432;
         color: #D8DDD9;
         font: inherit;
@@ -67,14 +67,37 @@
         touch-action: manipulation;
       }
     </style>
-    <link rel="stylesheet" href="styles.css?v=2026-05-05-21">
+    <link rel="stylesheet" href="styles.css?v=2026-05-05-32">
   </head>
   <body>
     <main class="shell" aria-label="halcyon">
       <section id="gameplay" class="gameplay" aria-label="gameplay area">
         <div class="start-screen">
-          <h1>halcyon</h1>
-          <button class="play-button" type="button">play</button>
+          <div class="home-anchor-layer" aria-hidden="true">
+            <video class="home-anchor-backdrop" src="assets/timeline-2.mp4" muted playsinline preload="auto"></video>
+          </div>
+          <div class="start-stack">
+            <h1>halcyon</h1>
+            <div class="start-guide-item">
+              <div class="home-collect-sprite">
+                <svg viewBox="0 0 16 16" focusable="false">
+                  <path class="spiral-depth" d="M8 8 C10.2 7.1 10.9 9.5 9.2 10.8 C6.9 12.7 3.9 10.7 4.3 7.7 C4.8 3.9 9.5 2.7 12.1 5.4 C14.9 8.4 13.3 13.1 9.4 14.1"></path>
+                  <path class="spiral-core" d="M8 8 C10.2 7.1 10.9 9.5 9.2 10.8 C6.9 12.7 3.9 10.7 4.3 7.7 C4.8 3.9 9.5 2.7 12.1 5.4 C14.9 8.4 13.3 13.1 9.4 14.1"></path>
+                  <circle class="spiral-highlight" cx="6.3" cy="5.2" r="1.1"></circle>
+                </svg>
+              </div>
+              <div class="start-guide-label">collect</div>
+            </div>
+            <div class="start-guide-item">
+              <div class="home-obstacle-sprite"></div>
+              <div class="start-guide-label">avoid</div>
+            </div>
+            <div class="start-guide-item home-move-item">
+              <div class="home-anchor-space" aria-hidden="true"></div>
+              <div class="start-guide-label">move</div>
+            </div>
+            <button class="play-button" type="button">play</button>
+          </div>
         </div>
         <div class="level-title" aria-hidden="true">level one</div>
         <div class="obstacle-field" aria-hidden="true"></div>
@@ -113,13 +136,19 @@
           <div class="triangle-center-anchor" aria-hidden="true"></div>
         </div>
         <div class="cursor" aria-hidden="true"></div>
-        <p id="hint" class="hint">click to enter</p>
         <div class="move-hud" aria-hidden="true">
           <div>minimum moves <span class="minimum-moves-value">0</span></div>
           <div>player moves <span class="player-moves-value">0</span></div>
         </div>
         <div class="close-call-message" aria-live="polite">close call!</div>
-        <div class="game-over-screen" aria-live="polite">game over</div>
+        <div class="game-over-screen" aria-live="polite">
+          <button class="again-button" type="button">again?</button>
+          <ol class="leaderboard-list"></ol>
+          <form class="score-form">
+            <input class="player-name-input" name="player-name" maxlength="20" autocomplete="off" placeholder="name">
+            <button class="score-submit-button" type="submit">submit</button>
+          </form>
+        </div>
         <div class="level-complete-screen" aria-live="polite">
           <div>level complete</div>
           <div class="score-line">score 0</div>
@@ -128,6 +157,7 @@
         <audio id="lost-loop-audio" src="assets/audio/halcyon_lost_loop.ogg" preload="auto" loop></audio>
       </section>
     </main>
-    <script src="game.js?v=2026-05-05-21"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="game.js?v=2026-05-05-32"></script>
   </body>
 </html>
