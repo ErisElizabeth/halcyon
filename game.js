@@ -10,6 +10,7 @@ const levelCompleteScreen = document.querySelector(".level-complete-screen");
 const scoreLine = document.querySelector(".score-line");
 const minimumMovesValue = document.querySelector(".minimum-moves-value");
 const playerMovesValue = document.querySelector(".player-moves-value");
+const closeCallMessage = document.querySelector(".close-call-message");
 const triangleLinksLayer = document.querySelector(".triangle-links");
 const triangleVideos = [...document.querySelectorAll(".triangle-video")];
 const assetNodes = [...document.querySelectorAll(".asset-node")];
@@ -29,9 +30,11 @@ const audioVolumes = {
 };
 const freezeOffsets = [0.2, 0.2, 0.02];
 const introPlaybackRate = 2;
-const obstacleCount = 50;
+const baseGameOverSpriteCount = 50;
+const gameOverSpriteGrowth = 1.0466;
 const obstacleSize = 16;
-const spiralCount = 3;
+const lethalObstacleSize = obstacleSize * 0.9;
+const baseSpiralCount = 3;
 const spiralSize = 16;
 const spiralObstacleAvoidanceDiameter = 40;
 const spiralSpacing = 120;
@@ -92,6 +95,8 @@ let activeAudioMode = "element";
 let webAudioLoopName = "playLoop";
 let webAudioLoopStartedAt = 0;
 let webAudioLoopOffset = 0;
+let currentLevel = 1;
+let closeCallTimer = null;
 
 Object.values(audioElements).forEach((track) => {
   track.volume = 0.6;
@@ -337,6 +342,14 @@ function randomBetween(min, max) {
   return min + Math.random() * (max - min);
 }
 
+function gameOverSpriteCountForLevel(level) {
+  return Math.round(baseGameOverSpriteCount * Math.pow(gameOverSpriteGrowth, level - 1));
+}
+
+function captureSpriteCountForLevel(level) {
+  return baseSpiralCount + Math.floor(level / 6);
+}
+
 function createIrregularPolygon(sides) {
   const points = [];
 
@@ -368,6 +381,7 @@ function generateObstacles() {
   const width = gameplay.clientWidth;
   const height = gameplay.clientHeight;
   const startArea = startAreaExclusion();
+  const obstacleCount = gameOverSpriteCountForLevel(currentLevel);
   const columns = Math.ceil(Math.sqrt(obstacleCount * width / height) * 1.35);
   const rows = Math.ceil(obstacleCount / columns * 1.35);
   const playableWidth = Math.max(1, width - obstacleEdgeMargin * 2);
@@ -444,6 +458,7 @@ function generateSpiralSprite() {
   const width = gameplay.clientWidth;
   const height = gameplay.clientHeight;
   const startArea = startAreaExclusion();
+  const spiralCount = captureSpriteCountForLevel(currentLevel);
   const obstacleAvoidanceRadius = spiralObstacleAvoidanceDiameter / 2 + spiralSize / 2;
   const obstacles = obstacleCenters();
   const candidates = [];
@@ -532,12 +547,28 @@ function triggerGameOver() {
   gameOver = true;
   rotationPaused = true;
   triangleSettling = false;
+  window.clearTimeout(closeCallTimer);
+  closeCallMessage.classList.remove("visible");
   window.clearTimeout(settleTimer);
   assetNodes.forEach((node) => node.classList.remove("settling"));
   draggedNode?.classList.remove("dragging");
   draggedNode = null;
   switchToLostAudio();
   playGameOverExplosion();
+}
+
+function showCloseCall() {
+  if (gameOver || levelComplete) {
+    return;
+  }
+
+  window.clearTimeout(closeCallTimer);
+  closeCallMessage.classList.remove("visible");
+  closeCallMessage.offsetWidth;
+  closeCallMessage.classList.add("visible");
+  closeCallTimer = window.setTimeout(() => {
+    closeCallMessage.classList.remove("visible");
+  }, 550);
 }
 
 function fadeOutTriangleLinks() {
@@ -615,12 +646,28 @@ function checkObstacleCollisions(points = assetNodes.map(nodePoint)) {
 
   const radius = anchorRadius();
   const obstacles = obstacleCenters();
+  let closeCall = false;
   const hit = points.some((point) => (
-    obstacles.some((obstacle) => circleIntersectsBox(point, radius, obstacle, obstacleSize))
+    obstacles.some((obstacle) => {
+      if (circleIntersectsBox(point, radius, obstacle, lethalObstacleSize)) {
+        return true;
+      }
+
+      if (circleIntersectsBox(point, radius, obstacle, obstacleSize)) {
+        closeCall = true;
+      }
+
+      return false;
+    })
   ));
 
   if (hit) {
     triggerGameOver();
+    return;
+  }
+
+  if (closeCall) {
+    showCloseCall();
   }
 }
 
@@ -664,6 +711,8 @@ function checkLevelComplete() {
   levelComplete = true;
   rotationPaused = true;
   triangleSettling = false;
+  window.clearTimeout(closeCallTimer);
+  closeCallMessage.classList.remove("visible");
   window.clearTimeout(settleTimer);
   updateMoveHud();
   scoreLine.textContent = `score ${levelScore()}`;
@@ -1465,7 +1514,7 @@ function updateTriangleCenter(points = assetNodes.map(nodePoint)) {
 }
 
 function startAssetDrag(event) {
-  if (triangleSettling || levelComplete || gameOver) {
+  if (draggedNode || triangleSettling || levelComplete || gameOver) {
     return;
   }
 
@@ -1660,6 +1709,7 @@ async function startGame(event) {
   levelComplete = false;
   triangleSettling = false;
   pendingCapturedSpirals.clear();
+  window.currentHalcyonLevel = currentLevel;
   window.halcyonPlayerMoves = playerMoves;
   startScreen.classList.add("hidden");
   gameplay.classList.add("started", "active");
@@ -1736,12 +1786,11 @@ assetNodes.forEach((node) => {
   const handle = node.querySelector(".asset-handle");
 
   handle.addEventListener("pointerdown", startAssetDrag);
-
-  if (!window.PointerEvent) {
-    handle.addEventListener("touchstart", startAssetDrag, { passive: false });
-  }
+  handle.addEventListener("touchstart", startAssetDrag, { passive: false });
 });
 playButton.addEventListener("click", startGame);
+playButton.addEventListener("pointerup", startGame);
+playButton.addEventListener("touchstart", startGame, { passive: false });
 playButton.addEventListener("touchend", startGame, { passive: false });
 document.addEventListener("pointerup", stopAssetDrag);
 document.addEventListener("touchend", stopAssetDrag);

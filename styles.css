@@ -121,6 +121,7 @@ body {
 .gameplay:not(.started) .triangle-test,
 .gameplay:not(.started) .cursor,
 .gameplay:not(.started) .move-hud,
+.gameplay:not(.started) .close-call-message,
 .gameplay:not(.started) .hint {
   opacity: 0;
 }
@@ -143,7 +144,7 @@ body {
 .obstacle-field {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  z-index: 3;
   opacity: 0;
   pointer-events: none;
   transition: opacity 1.5s ease;
@@ -413,6 +414,27 @@ body {
   text-align: right;
 }
 
+.close-call-message {
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  z-index: 5;
+  translate: -50% -50%;
+  color: #D8DDD9;
+  font-size: clamp(1.1rem, 3.5vmin, 2.2rem);
+  font-weight: 600;
+  letter-spacing: 0;
+  opacity: 0;
+  pointer-events: none;
+  text-shadow:
+    0 0 10px rgba(255, 255, 255, 0.7),
+    0 0 18px rgba(255, 47, 47, 0.7);
+}
+
+.close-call-message.visible {
+  animation: close-call-flash 0.55s ease-out both;
+}
+
 .game-over-screen,
 .level-complete-screen {
   position: absolute;
@@ -477,5 +499,17 @@ body {
 
   100% {
     opacity: 0;
+  }
+}
+
+@keyframes close-call-flash {
+  0%,
+  100% {
+    opacity: 0;
+  }
+
+  18%,
+  72% {
+    opacity: 1;
   }
 }
