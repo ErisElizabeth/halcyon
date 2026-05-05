@@ -1,4 +1,6 @@
 const gameplay = document.querySelector("#gameplay");
+const startScreen = document.querySelector(".start-screen");
+const playButton = document.querySelector(".play-button");
 const cursor = document.querySelector(".cursor");
 const obstacleField = document.querySelector(".obstacle-field");
 const gameOverScreen = document.querySelector(".game-over-screen");
@@ -7,6 +9,14 @@ const triangleVideos = [...document.querySelectorAll(".triangle-video")];
 const assetNodes = [...document.querySelectorAll(".asset-node")];
 const triangleLinks = [...document.querySelectorAll(".triangle-link")];
 const triangleCenterAnchor = document.querySelector(".triangle-center-anchor");
+const audioElements = {
+  playLoop: document.querySelector("#play-loop-audio"),
+  lostLoop: document.querySelector("#lost-loop-audio"),
+};
+const audioFiles = {
+  playLoop: "assets/audio/halcyon_play_loop.ogg",
+  lostLoop: "assets/audio/halcyon_lost_loop.ogg",
+};
 const freezeOffsets = [0.2, 0.2, 0.02];
 const introPlaybackRate = 2;
 const obstacleCount = 50;
@@ -33,9 +43,160 @@ let dragStartSideLength = 0;
 let rotationPaused = true;
 let lastRotationTime = null;
 let gameOver = false;
+let gameStarted = false;
+let audioStarted = false;
+let lostAudioStarted = false;
+let activeAudio = audioElements.playLoop;
+let audioContext = null;
+let audioGain = null;
+let audioBuffers = null;
+let audioBuffersPromise = null;
+let activeAudioSource = null;
+let activeAudioMode = "element";
+let webAudioLoopName = "playLoop";
+let webAudioLoopStartedAt = 0;
+let webAudioLoopOffset = 0;
+
+Object.values(audioElements).forEach((track) => {
+  track.volume = 0.6;
+});
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function playElementAudio(track) {
+  const playback = track.play();
+
+  playback?.catch(() => {});
+}
+
+function ensureAudioContext() {
+  if (!audioContext) {
+    audioContext = new AudioContext();
+    audioGain = audioContext.createGain();
+    audioGain.gain.value = 0.6;
+    audioGain.connect(audioContext.destination);
+  }
+
+  return audioContext;
+}
+
+function loadAudioBuffers() {
+  const context = ensureAudioContext();
+
+  if (!audioBuffersPromise) {
+    audioBuffersPromise = Promise.all(
+      Object.entries(audioFiles).map(async ([name, url]) => {
+        const response = await fetch(url);
+        const data = await response.arrayBuffer();
+        const buffer = await context.decodeAudioData(data);
+
+        return [name, buffer];
+      }),
+    ).then((entries) => {
+      audioBuffers = Object.fromEntries(entries);
+      return audioBuffers;
+    }).catch(() => null);
+  }
+
+  return audioBuffersPromise;
+}
+
+function stopWebAudioLoop() {
+  if (!activeAudioSource) {
+    return;
+  }
+
+  try {
+    activeAudioSource.stop();
+  } catch {
+    // source may already be stopped
+  }
+
+  activeAudioSource = null;
+}
+
+function startWebAudioLoop(name, offset = 0) {
+  const context = ensureAudioContext();
+  const source = context.createBufferSource();
+  const buffer = audioBuffers[name];
+  const marker = buffer.duration > 0 ? offset % buffer.duration : 0;
+
+  stopWebAudioLoop();
+  source.buffer = buffer;
+  source.loop = true;
+  source.connect(audioGain);
+  source.start(context.currentTime + 0.01, marker);
+  activeAudioSource = source;
+  activeAudioMode = "web";
+  webAudioLoopName = name;
+  webAudioLoopStartedAt = context.currentTime + 0.01;
+  webAudioLoopOffset = marker;
+}
+
+function currentWebAudioMarker() {
+  const buffer = audioBuffers?.[webAudioLoopName];
+
+  if (!audioContext || !buffer) {
+    return 0;
+  }
+
+  return (audioContext.currentTime - webAudioLoopStartedAt + webAudioLoopOffset) % buffer.duration;
+}
+
+function switchAudio(fromTrack, toTrack, time) {
+  fromTrack.pause();
+  const duration = toTrack.duration || 0;
+  const marker = toTrack.loop && duration > 0
+    ? time % duration
+    : Math.min(time, duration || time);
+
+  toTrack.currentTime = marker;
+  activeAudio = toTrack;
+  playElementAudio(toTrack);
+}
+
+async function startPlayAudio() {
+  if (audioStarted || gameOver) {
+    return;
+  }
+
+  audioStarted = true;
+
+  try {
+    const context = ensureAudioContext();
+
+    await context.resume();
+    await loadAudioBuffers();
+
+    if (audioBuffers) {
+      startWebAudioLoop("playLoop", 0);
+      return;
+    }
+  } catch {
+    // fall back to audio elements below
+  }
+
+  activeAudioMode = "element";
+  activeAudio = audioElements.playLoop;
+  audioElements.playLoop.currentTime = 0;
+  playElementAudio(audioElements.playLoop);
+}
+
+function switchToLostAudio() {
+  if (lostAudioStarted || !audioStarted) {
+    return;
+  }
+
+  lostAudioStarted = true;
+
+  if (activeAudioMode === "web" && audioBuffers) {
+    startWebAudioLoop("lostLoop", currentWebAudioMarker());
+    return;
+  }
+
+  switchAudio(activeAudio, audioElements.lostLoop, activeAudio.currentTime || 0);
 }
 
 function cssPixelValue(name) {
@@ -196,6 +357,7 @@ function triggerGameOver() {
   rotationPaused = true;
   draggedNode?.classList.remove("dragging");
   draggedNode = null;
+  switchToLostAudio();
   gameOverScreen.classList.add("visible");
 }
 
@@ -669,8 +831,27 @@ function startTriangleTest() {
   });
 }
 
+function startGame() {
+  if (gameStarted) {
+    return;
+  }
+
+  gameStarted = true;
+  startScreen.classList.add("hidden");
+  gameplay.classList.add("started", "active");
+  generateObstacles();
+  centerCursor();
+  updateTriangleLinks();
+  requestAnimationFrame(() => {
+    updateTriangleLinks();
+  });
+  requestAnimationFrame(rotateTriangle);
+  startPlayAudio();
+  startTriangleTest();
+}
+
 gameplay.addEventListener("pointermove", (event) => {
-  if (gameOver) {
+  if (!gameStarted || gameOver) {
     return;
   }
 
@@ -691,7 +872,7 @@ gameplay.addEventListener("pointermove", (event) => {
 });
 
 gameplay.addEventListener("click", () => {
-  if (gameOver) {
+  if (!gameStarted || gameOver) {
     return;
   }
 
@@ -715,12 +896,7 @@ window.addEventListener("resize", () => {
 assetNodes.forEach((node) => {
   node.querySelector(".asset-handle").addEventListener("pointerdown", startAssetDrag);
 });
+playButton.addEventListener("click", startGame);
 document.addEventListener("pointerup", stopAssetDrag);
-generateObstacles();
 centerCursor();
 updateTriangleLinks();
-requestAnimationFrame(() => {
-  updateTriangleLinks();
-});
-requestAnimationFrame(rotateTriangle);
-startTriangleTest();
