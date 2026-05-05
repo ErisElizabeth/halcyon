@@ -575,7 +575,7 @@ body {
 
 .game-over-screen {
   align-content: center;
-  gap: 0.75rem;
+  gap: 1rem;
 }
 
 .again-button,
@@ -608,6 +608,12 @@ body {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+  margin: 0.35rem 0 0.2rem;
+}
+
+.score-form[hidden],
+.high-score-status[hidden] {
+  display: none;
 }
 
 .player-name-input {
@@ -628,12 +634,24 @@ body {
 
 .leaderboard-list {
   min-height: 3.8rem;
-  margin: 0.25rem 0 0;
+  margin: 0.55rem 0 0;
   padding-left: 1.5rem;
   color: #D8DDD9;
   font-size: clamp(0.95rem, 2.5vmin, 1.4rem);
   line-height: 1.45;
   text-align: left;
+}
+
+.game-over-score-line,
+.high-score-status {
+  color: #D8DDD9;
+  font-size: clamp(1.05rem, 3vmin, 1.8rem);
+  line-height: 1.35;
+  text-align: center;
+}
+
+.high-score-status {
+  margin-top: 0.35rem;
 }
 
 .level-complete-screen {

@@ -11,10 +11,14 @@ const spiralField = document.querySelector(".spiral-field");
 const triangleTest = document.querySelector(".triangle-test");
 const gameOverScreen = document.querySelector(".game-over-screen");
 const levelCompleteScreen = document.querySelector(".level-complete-screen");
+const gameOverScoreLine = document.querySelector(".game-over-score-line");
+const highScoreStatus = document.querySelector(".high-score-status");
+const highScoreRank = document.querySelector(".high-score-rank");
 const scoreLine = document.querySelector(".score-line");
 const againButton = document.querySelector(".again-button");
 const scoreForm = document.querySelector(".score-form");
 const playerNameInput = document.querySelector(".player-name-input");
+const scoreSubmitButton = document.querySelector(".score-submit-button");
 const leaderboardList = document.querySelector(".leaderboard-list");
 const minimumMovesValue = document.querySelector(".minimum-moves-value");
 const playerMovesValue = document.querySelector(".player-moves-value");
@@ -79,6 +83,7 @@ const cursorState = {
   x: 0,
   y: 0,
 };
+let lastPointerClientPoint = null;
 let draggedNode = null;
 let draggedHandle = null;
 let suppressNextGameplayClick = false;
@@ -113,6 +118,9 @@ let pendingCloseCall = false;
 let finalScore = 0;
 let totalScore = 0;
 let scoreSubmitted = false;
+let gameOverLeaderboardStarted = false;
+let qualifyingHighScoreRank = null;
+let showNameEntry = false;
 let supabaseClient = null;
 let audioOutputScale = 1;
 let elementFadeFrame = null;
@@ -120,6 +128,11 @@ let triangleReady = false;
 let restartTimer = null;
 let gameOverCleanupStarted = false;
 let levelTransitioning = false;
+let isTransitioning = false;
+let restartCleanupRunning = false;
+let gameplaySpawningAllowed = false;
+let rotationLoopStarted = false;
+let visualGeneration = 0;
 const collisionTestKeys = new Set();
 
 Object.values(audioElements).forEach((track) => {
@@ -395,6 +408,11 @@ function moveCursor(x, y) {
   cursor.style.transform = `translate(${cursorState.x}px, ${cursorState.y}px)`;
 }
 
+function moveCursorToClientPoint(point) {
+  const bounds = playableBounds();
+  moveCursor(point.x - bounds.rect.left, point.y - bounds.rect.top);
+}
+
 function moveLockedCursor(deltaX, deltaY) {
   const bounds = playableBounds();
   const atLeft = cursorState.x <= bounds.minX;
@@ -467,6 +485,11 @@ function eventClientPoint(event) {
 
 function moveCursorToInput(event) {
   if (!event) {
+    if (lastPointerClientPoint) {
+      moveCursorToClientPoint(lastPointerClientPoint);
+      return;
+    }
+
     centerCursor();
     return;
   }
@@ -476,8 +499,12 @@ function moveCursorToInput(event) {
   }
 
   const point = eventClientPoint(event);
-  const bounds = playableBounds();
-  moveCursor(point.x - bounds.rect.left, point.y - bounds.rect.top);
+
+  if (!eventIsTouch(event)) {
+    lastPointerClientPoint = point;
+  }
+
+  moveCursorToClientPoint(point);
 }
 
 function eventIsTouch(event) {
@@ -485,7 +512,7 @@ function eventIsTouch(event) {
 }
 
 function handleGameplayAction(event) {
-  if (!gameStarted || gameOver || levelComplete) {
+  if (!gameStarted || gameOver || levelComplete || levelTransitioning) {
     return;
   }
 
@@ -550,6 +577,10 @@ function startAreaExclusion() {
 }
 
 function generateObstacles() {
+  if (levelTransitioning && !gameplaySpawningAllowed) {
+    return;
+  }
+
   obstacleField.replaceChildren();
   const width = gameplay.clientWidth;
   const height = gameplay.clientHeight;
@@ -627,6 +658,10 @@ function createSpiralSprite() {
 }
 
 function generateSpiralSprite() {
+  if (levelTransitioning && !gameplaySpawningAllowed) {
+    return;
+  }
+
   spiralField.replaceChildren();
   const width = gameplay.clientWidth;
   const height = gameplay.clientHeight;
@@ -730,9 +765,12 @@ function triggerGameOver() {
   closeCallMessage.classList.remove("visible");
   finalScore = totalScore;
   scoreSubmitted = false;
-  scoreForm.hidden = false;
+  gameOverLeaderboardStarted = false;
+  qualifyingHighScoreRank = null;
+  setNameEntryVisible(false);
+  gameOverScoreLine.textContent = `score: ${Math.trunc(finalScore)}`;
   playerNameInput.value = "";
-  leaderboardList.replaceChildren();
+  renderLeaderboardMessage("loading scores...");
   window.clearTimeout(settleTimer);
   assetNodes.forEach((node) => node.classList.remove("settling"));
   draggedNode?.classList.remove("dragging");
@@ -742,7 +780,7 @@ function triggerGameOver() {
 }
 
 function showCloseCall() {
-  if (gameOver || levelComplete) {
+  if (gameOver || levelComplete || levelTransitioning) {
     return;
   }
 
@@ -856,23 +894,54 @@ function fadeElementToZero(element, duration) {
   });
 }
 
+function currentElementOpacity(element) {
+  const opacity = Number.parseFloat(getComputedStyle(element).opacity);
+
+  return Number.isNaN(opacity) ? 1 : opacity;
+}
+
 function resetElementFadeState(element) {
   element.getAnimations?.().forEach((animation) => animation.cancel());
   element.style.opacity = "";
 }
 
+function clearTriangleLinks() {
+  triangleLinksLayer.getAnimations?.().forEach((animation) => animation.cancel());
+  triangleLinksLayer.classList.remove("visible");
+  triangleLinksLayer.style.opacity = "";
+  triangleLinks.forEach((line) => {
+    line.setAttribute("x1", "0");
+    line.setAttribute("y1", "0");
+    line.setAttribute("x2", "0");
+    line.setAttribute("y2", "0");
+  });
+}
+
+function hideTriangleLinksImmediately() {
+  clearTriangleLinks();
+  triangleLinksLayer.style.opacity = "0";
+}
+
 function resetLevelVisualLayers() {
-  [triangleTest, obstacleField, spiralField, triangleLinksLayer, closeCallMessage].forEach(resetElementFadeState);
+  [triangleTest, obstacleField, spiralField, triangleLinksLayer, closeCallMessage, cursor].forEach(resetElementFadeState);
   obstacleField.classList.remove("visible");
   spiralField.classList.remove("visible");
-  triangleLinksLayer.classList.remove("visible");
   closeCallMessage.classList.remove("visible");
+  clearTriangleLinks();
+}
+
+function cleanupOldLevelVisualsAndState() {
+  clearGameplayObjects();
+  resetLevelVisualLayers();
+  resetTriangleToCenter();
 }
 
 function clearGameplayObjects() {
   obstacleField.replaceChildren();
   spiralField.replaceChildren();
   pendingCapturedSpirals.clear();
+  dragStartPoints = null;
+  suppressNextGameplayClick = false;
   draggedNode?.classList.remove("dragging");
   draggedNode = null;
   draggedHandle = null;
@@ -882,14 +951,60 @@ function clearGameplayObjects() {
   window.clearTimeout(settleTimer);
   window.clearTimeout(closeCallTimer);
   closeCallMessage.classList.remove("visible");
+  clearTriangleLinks();
+}
+
+function cleanupActiveGameplaySprites(duration = 250, invalidateVisuals = true) {
+  if (invalidateVisuals) {
+    visualGeneration += 1;
+  }
+
+  levelTransitioning = true;
+  triangleReady = false;
+  triangleSettling = false;
+  rotationPaused = true;
+  draggedNode?.classList.remove("dragging");
+  draggedNode = null;
+  draggedHandle = null;
+  window.clearTimeout(settleTimer);
+  window.clearTimeout(closeCallTimer);
+  closeCallMessage.classList.remove("visible");
+
+  const fadingElements = [obstacleField, spiralField, triangleTest, triangleLinksLayer, closeCallMessage, cursor];
+  const fades = fadingElements.map((element) => {
+    element.style.pointerEvents = "none";
+
+    if (!element.animate || duration <= 0) {
+      element.style.opacity = "0";
+      return Promise.resolve();
+    }
+
+    const fade = element.animate(
+      [
+        { opacity: currentElementOpacity(element) },
+        { opacity: 0 },
+      ],
+      {
+        duration,
+        easing: "ease",
+        fill: "forwards",
+      },
+    );
+
+    return fade.finished.catch(() => {});
+  });
+
+  return Promise.all(fades).then(() => {
+    cleanupOldLevelVisualsAndState();
+  });
 }
 
 function showGameOverScreen() {
   gameOverScreen.classList.add("visible");
-  fadeAndClearRemainingSprites();
+  loadGameOverLeaderboard();
 }
 
-function playExplosionVideo(video) {
+function playExplosionVideo(video, generation) {
   const node = video.closest(".asset-node");
 
   video.pause();
@@ -900,6 +1015,10 @@ function playExplosionVideo(video) {
   video.playbackRate = 1 / explosionSlowdown;
 
   function startExplosion() {
+    if (generation !== visualGeneration) {
+      return;
+    }
+
     video.removeEventListener("canplay", startExplosion);
     video.removeEventListener("loadeddata", startExplosion);
     video.currentTime = 0;
@@ -918,14 +1037,20 @@ function playExplosionVideo(video) {
 }
 
 function playGameOverExplosion() {
+  const generation = visualGeneration;
+
   fadeOutTriangleLinks().then(() => {
-    showGameOverScreen();
+    if (generation === visualGeneration) {
+      showGameOverScreen();
+    }
   });
 
-  triangleVideos.forEach(playExplosionVideo);
+  triangleVideos.forEach((video) => playExplosionVideo(video, generation));
 
   window.setTimeout(() => {
-    showGameOverScreen();
+    if (generation === visualGeneration) {
+      showGameOverScreen();
+    }
   }, explosionDuration);
 }
 
@@ -946,6 +1071,7 @@ function resetTriangleVideos() {
 
   triangleLinksLayer.classList.remove("visible");
   triangleLinksLayer.style.opacity = "";
+  clearTriangleLinks();
 }
 
 function resetTriangleToCenter() {
@@ -954,57 +1080,194 @@ function resetTriangleToCenter() {
     node.style.removeProperty("left");
     node.style.removeProperty("top");
   });
-  centerCursor();
-  updateTriangleLinks();
+  moveCursorToInput();
+  clearTriangleLinks();
 }
 
-function clearAndStartLevel(nextLevel) {
-  currentLevel = nextLevel;
+function transitionHasOldVisuals(mode) {
+  return mode !== "fresh"
+    || gameStarted
+    || gameOver
+    || levelComplete
+    || obstacleField.children.length > 0
+    || spiralField.children.length > 0
+    || triangleVideos.some((video) => (
+      video.classList.contains("active")
+      || video.classList.contains("frozen")
+      || video.classList.contains("exploding")
+    ))
+    || triangleLinksLayer.classList.contains("visible");
+}
+
+function prepareTransitionState(mode, event, earnedScore = 0) {
+  if (mode === "fresh" || mode === "again") {
+    currentLevel = 1;
+    levelOneMinimumMoves = null;
+    totalScore = 0;
+    finalScore = 0;
+    lostAudioStarted = false;
+  }
+
+  if (mode === "nextLevel") {
+    totalScore += earnedScore;
+    finalScore = totalScore;
+    currentLevel += 1;
+    scoreLine.textContent = `score ${totalScore}`;
+  }
+
   levelComplete = false;
   gameStarted = false;
   gameOver = false;
   triangleReady = false;
-  levelTransitioning = false;
   gameOverCleanupStarted = false;
   pendingCloseCall = false;
   playerMoves = 0;
+  scoreSubmitted = false;
+  pendingCapturedSpirals.clear();
   window.halcyonPlayerMoves = playerMoves;
+  gameOverScreen.classList.remove("visible");
   levelCompleteScreen.classList.remove("visible");
-  resetLevelVisualLayers();
-  clearGameplayObjects();
-  resetTriangleToCenter();
-  startGame();
+  startScreen.classList.add("hidden");
+  gameplay.classList.remove("game-ended");
+  gameplay.classList.add("started", "active");
+  gameStarted = true;
+  baseTriangleSideLength = sideLengthFrom(assetNodes.map(nodePoint));
+  moveCursorToInput(event);
+
+  if (currentLevel === 1 || levelOneMinimumMoves === null) {
+    levelOneMinimumMoves = Math.floor(randomBetween(levelOneMinimumMoveLow, levelOneMinimumMoveHigh + 1));
+    window.halcyonLevelOneMinimumMoves = levelOneMinimumMoves;
+  }
+
+  window.currentHalcyonLevel = currentLevel;
+  window.halcyonLevelMinimumMoves = minimumMovesForLevel(currentLevel);
+  updateHud();
 }
 
-function restartGame(event) {
-  event?.preventDefault();
-
-  if (!gameOver && !levelComplete) {
+function ensureTriangleRotationLoop() {
+  if (rotationLoopStarted) {
     return;
   }
 
-  window.clearTimeout(restartTimer);
-  switchToPlayAudio();
-  gameOver = false;
-  levelComplete = false;
-  gameStarted = false;
-  lostAudioStarted = false;
-  currentLevel = 1;
-  levelOneMinimumMoves = null;
-  playerMoves = 0;
-  totalScore = 0;
-  finalScore = 0;
+  rotationLoopStarted = true;
+  requestAnimationFrame(rotateTriangle);
+}
+
+async function spawnGameplaySpritesAfterTriangle(generation) {
+  if (generation !== visualGeneration) {
+    return;
+  }
+
+  gameplaySpawningAllowed = true;
+  generateObstacles();
+  generateSpiralSprite();
+  gameplaySpawningAllowed = false;
+
+  await Promise.all([
+    fadeInLayer(obstacleField).finished.catch(() => {}),
+    fadeInLayer(spiralField).finished.catch(() => {}),
+  ]);
+}
+
+async function runTransition(mode, event, options = {}) {
+  event?.preventDefault();
+
+  if (isTransitioning) {
+    return;
+  }
+
+  if (mode === "fresh" && gameStarted) {
+    return;
+  }
+
+  if (mode === "again" && !gameOver && !levelComplete) {
+    return;
+  }
+
+  isTransitioning = true;
   levelTransitioning = true;
+  restartCleanupRunning = mode === "again";
+  gameplaySpawningAllowed = false;
+  visualGeneration += 1;
+  const transitionGeneration = visualGeneration;
+
   triangleReady = false;
-  gameplay.classList.remove("game-ended");
+  triangleSettling = false;
+  rotationPaused = true;
+  draggedNode?.classList.remove("dragging");
+  draggedNode = null;
+  draggedHandle = null;
   pendingCloseCall = false;
-  gameOverScreen.classList.remove("visible");
-  levelCompleteScreen.classList.remove("visible");
-  fadeAndClearRemainingSprites(levelTransitionDuration);
-  fadeElementToZero(triangleTest, levelTransitionDuration);
-  restartTimer = window.setTimeout(() => {
-    clearAndStartLevel(1);
-  }, levelTransitionDuration);
+  window.clearTimeout(restartTimer);
+  window.clearTimeout(settleTimer);
+  window.clearTimeout(closeCallTimer);
+  closeCallMessage.classList.remove("visible");
+
+  if (mode === "again") {
+    gameOverLeaderboardStarted = false;
+    qualifyingHighScoreRank = null;
+    setNameEntryVisible(false);
+    switchToPlayAudio();
+    gameplay.classList.remove("game-ended");
+    hideTriangleLinksImmediately();
+    gameOverScreen.classList.remove("visible");
+    levelCompleteScreen.classList.remove("visible");
+  }
+
+  if (mode === "nextLevel") {
+    levelComplete = true;
+    levelCompleteScreen.classList.remove("visible");
+  }
+
+  try {
+    if (transitionHasOldVisuals(mode)) {
+      await cleanupActiveGameplaySprites(levelTransitionDuration, false);
+    } else {
+      cleanupOldLevelVisualsAndState();
+    }
+
+    if (transitionGeneration !== visualGeneration) {
+      return;
+    }
+
+    prepareTransitionState(mode, event, options.earnedScore || 0);
+    startPlayAudio();
+    await showLevelTitle(transitionGeneration);
+
+    if (transitionGeneration !== visualGeneration) {
+      return;
+    }
+
+    clearTriangleLinks();
+    ensureTriangleRotationLoop();
+    await startTriangleTest(transitionGeneration);
+
+    if (transitionGeneration !== visualGeneration || gameOver) {
+      return;
+    }
+
+    await spawnGameplaySpritesAfterTriangle(transitionGeneration);
+
+    if (transitionGeneration !== visualGeneration || gameOver) {
+      return;
+    }
+
+    levelTransitioning = false;
+    isTransitioning = false;
+    restartCleanupRunning = false;
+    rotationPaused = false;
+  } catch {
+    if (transitionGeneration === visualGeneration) {
+      levelTransitioning = false;
+      isTransitioning = false;
+      restartCleanupRunning = false;
+      gameplaySpawningAllowed = false;
+    }
+  }
+}
+
+function restartGame(event) {
+  runTransition("again", event);
 }
 
 function checkObstacleCollisions(points = assetNodes.map(nodePoint)) {
@@ -1120,10 +1383,7 @@ function renderGameOverLeaderboard(scores) {
   leaderboardList.replaceChildren();
 
   if (!scores) {
-    const item = document.createElement("li");
-
-    item.textContent = "Leaderboard unavailable.";
-    leaderboardList.appendChild(item);
+    renderLeaderboardMessage("leaderboard unavailable.");
     return;
   }
 
@@ -1131,9 +1391,72 @@ function renderGameOverLeaderboard(scores) {
     const item = document.createElement("li");
     const name = (score.player_name || "Anonymous").trim().slice(0, 20) || "Anonymous";
 
-    item.textContent = `${name} — ${Math.trunc(score.score)}`;
+    item.textContent = `${name} \u2014 ${Math.trunc(score.score)}`;
     leaderboardList.appendChild(item);
   });
+}
+
+function renderLeaderboardMessage(message) {
+  leaderboardList.replaceChildren();
+  const item = document.createElement("li");
+
+  item.textContent = message;
+  leaderboardList.appendChild(item);
+}
+
+function setNameEntryVisible(visible) {
+  showNameEntry = visible;
+  highScoreStatus.hidden = !visible;
+  scoreForm.hidden = !visible;
+  playerNameInput.disabled = !visible;
+  scoreSubmitButton.disabled = !visible;
+}
+
+function highScoreRankFor(score, scores) {
+  const playerScore = Math.trunc(score);
+
+  if (scores.length < 3) {
+    const betterScoreIndex = scores.findIndex((entry) => playerScore > Math.trunc(entry.score));
+
+    return betterScoreIndex === -1 ? scores.length + 1 : betterScoreIndex + 1;
+  }
+
+  const beatenScoreIndex = scores.findIndex((entry) => playerScore > Math.trunc(entry.score));
+
+  if (beatenScoreIndex !== -1) {
+    return beatenScoreIndex + 1;
+  }
+
+  return null;
+}
+
+async function loadGameOverLeaderboard() {
+  if (gameOverLeaderboardStarted) {
+    return;
+  }
+
+  gameOverLeaderboardStarted = true;
+  renderLeaderboardMessage("loading scores...");
+
+  try {
+    const scores = await fetchTopThreeHighScores();
+
+    renderGameOverLeaderboard(scores);
+    qualifyingHighScoreRank = highScoreRankFor(finalScore, scores);
+
+    if (!qualifyingHighScoreRank) {
+      setNameEntryVisible(false);
+      return;
+    }
+
+    highScoreRank.textContent = `you beat score #${qualifyingHighScoreRank}`;
+    setNameEntryVisible(true);
+    playerNameInput.focus({ preventScroll: true });
+  } catch {
+    qualifyingHighScoreRank = null;
+    setNameEntryVisible(false);
+    renderGameOverLeaderboard(null);
+  }
 }
 
 function updateHud() {
@@ -1147,7 +1470,7 @@ function updateHud() {
 }
 
 function checkLevelComplete() {
-  if (levelComplete || gameOver) {
+  if (levelComplete || gameOver || levelTransitioning || isTransitioning) {
     return;
   }
 
@@ -1157,26 +1480,9 @@ function checkLevelComplete() {
     return;
   }
 
-  levelComplete = true;
-  levelTransitioning = true;
-  rotationPaused = true;
-  triangleSettling = false;
-  triangleReady = false;
-  window.clearTimeout(closeCallTimer);
-  closeCallMessage.classList.remove("visible");
-  window.clearTimeout(settleTimer);
   const earnedScore = levelScore();
 
-  totalScore += earnedScore;
-  finalScore = totalScore;
-  updateHud();
-  scoreLine.textContent = `score ${totalScore}`;
-  fadeAndClearRemainingSprites(levelTransitionDuration);
-  fadeElementToZero(triangleTest, levelTransitionDuration);
-  fadeElementToZero(closeCallMessage, levelTransitionDuration);
-  window.setTimeout(() => {
-    clearAndStartLevel(currentLevel + 1);
-  }, levelTransitionDuration);
+  runTransition("nextLevel", null, { earnedScore });
 }
 
 function checkSpiralCollisions(points = assetNodes.map(nodePoint)) {
@@ -1992,7 +2298,7 @@ function updateTriangleCenter(points = assetNodes.map(nodePoint)) {
 }
 
 function startAssetDrag(event) {
-  if (!triangleReady || draggedNode || triangleSettling || levelComplete || gameOver) {
+  if (!triangleReady || draggedNode || triangleSettling || levelComplete || gameOver || levelTransitioning) {
     return;
   }
 
@@ -2077,12 +2383,12 @@ function fadeInLayer(element) {
   return fade;
 }
 
-function playTriangleVideo(index) {
+function playTriangleVideo(index, generation) {
   const video = triangleVideos[index];
   const node = assetNodes[index];
 
-  if (!video) {
-    return;
+  if (!video || generation !== visualGeneration) {
+    return Promise.resolve();
   }
 
   const videoDuration = Number.isFinite(video.duration) && video.duration > 0
@@ -2091,63 +2397,73 @@ function playTriangleVideo(index) {
   const freezeAt = Math.max(0, videoDuration - freezeOffsets[index]);
   let nextStarted = false;
 
-  function finishVideo() {
-    if (nextStarted) {
-      return;
-    }
+  return new Promise((resolve) => {
+    function finishVideo() {
+      video.removeEventListener("timeupdate", onTimeUpdate);
 
-    nextStarted = true;
-    freezeVideo(video, freezeAt);
+      if (nextStarted || generation !== visualGeneration) {
+        resolve();
+        return;
+      }
 
-    if (index === triangleVideos.length - 1) {
-      const legsFade = fadeInLayer(triangleLinksLayer);
-      fadeInLayer(obstacleField);
-      fadeInLayer(spiralField);
+      nextStarted = true;
+      freezeVideo(video, freezeAt);
 
-      legsFade.finished.then(() => {
-        window.setTimeout(() => {
-          if (!gameOver) {
+      if (index === triangleVideos.length - 1) {
+        updateTriangleLinks();
+        const legsFade = fadeInLayer(triangleLinksLayer);
+
+        legsFade.finished.then(() => {
+          window.setTimeout(() => {
+            if (!gameOver && generation === visualGeneration) {
+              triangleReady = true;
+              rotationPaused = false;
+            }
+
+            resolve();
+          }, rotationStartDelay);
+        }).catch(() => {
+          if (!gameOver && generation === visualGeneration) {
             triangleReady = true;
             rotationPaused = false;
           }
-        }, rotationStartDelay);
-      }).catch(() => {
-        if (!gameOver) {
-          triangleReady = true;
-          rotationPaused = false;
-        }
+
+          resolve();
+        });
+        return;
+      }
+
+      playTriangleVideo(index + 1, generation).then(resolve);
+    }
+
+    function onTimeUpdate() {
+      if (nextStarted || video.currentTime < freezeAt) {
+        return;
+      }
+
+      finishVideo();
+    }
+
+    video.currentTime = 0;
+    video.playbackRate = introPlaybackRate;
+    node.style.setProperty("--mask-shrink-duration", `${freezeAt / introPlaybackRate}s`);
+    node.classList.add("mask-tight");
+    video.classList.add("active");
+    const playback = video.play();
+
+    if (playback) {
+      playback.catch(() => {
+        window.setTimeout(finishVideo, 250);
       });
-      return;
     }
 
-    playTriangleVideo(index + 1);
-  }
+    window.setTimeout(finishVideo, freezeAt / introPlaybackRate * 1000 + 350);
 
-  video.currentTime = 0;
-  video.playbackRate = introPlaybackRate;
-  node.style.setProperty("--mask-shrink-duration", `${freezeAt / introPlaybackRate}s`);
-  node.classList.add("mask-tight");
-  video.classList.add("active");
-  const playback = video.play();
-
-  if (playback) {
-    playback.catch(() => {
-      window.setTimeout(finishVideo, 250);
-    });
-  }
-
-  window.setTimeout(finishVideo, freezeAt / introPlaybackRate * 1000 + 350);
-
-  video.addEventListener("timeupdate", () => {
-    if (nextStarted || video.currentTime < freezeAt) {
-      return;
-    }
-
-    finishVideo();
+    video.addEventListener("timeupdate", onTimeUpdate);
   });
 }
 
-function startTriangleTest() {
+function startTriangleTest(generation) {
   const readyVideos = triangleVideos.map((video) => (
     video.readyState >= HTMLMediaElement.HAVE_METADATA
       ? Promise.resolve()
@@ -2161,12 +2477,16 @@ function startTriangleTest() {
       })
   ));
 
-  Promise.all(readyVideos).then(() => {
-    playTriangleVideo(0);
+  return Promise.all(readyVideos).then(() => {
+    if (generation === visualGeneration) {
+      return playTriangleVideo(0, generation);
+    }
+
+    return Promise.resolve();
   });
 }
 
-function showLevelTitle() {
+function showLevelTitle(generation) {
   levelTitle.textContent = `level ${currentLevel}`;
   levelTitle.classList.remove("showing");
   levelTitle.offsetWidth;
@@ -2174,54 +2494,17 @@ function showLevelTitle() {
 
   return new Promise((resolve) => {
     window.setTimeout(() => {
-      levelTitle.classList.remove("showing");
+      if (generation === visualGeneration) {
+        levelTitle.classList.remove("showing");
+      }
+
       resolve();
     }, levelTitleDuration);
   });
 }
 
 async function startGame(event) {
-  if (gameStarted) {
-    return;
-  }
-
-  event?.preventDefault();
-  window.clearTimeout(restartTimer);
-  gameStarted = true;
-  playerMoves = 0;
-  levelComplete = false;
-  triangleSettling = false;
-  triangleReady = false;
-  gameOverCleanupStarted = false;
-  scoreSubmitted = false;
-  pendingCapturedSpirals.clear();
-  pendingCloseCall = false;
-  gameOverScreen.classList.remove("visible");
-  levelCompleteScreen.classList.remove("visible");
-  resetLevelVisualLayers();
-  window.currentHalcyonLevel = currentLevel;
-  window.halcyonPlayerMoves = playerMoves;
-  startScreen.classList.add("hidden");
-  gameplay.classList.remove("game-ended");
-  gameplay.classList.add("started", "active");
-  baseTriangleSideLength = sideLengthFrom(assetNodes.map(nodePoint));
-  moveCursorToInput(event);
-  startPlayAudio();
-  await showLevelTitle();
-  if (currentLevel === 1 || levelOneMinimumMoves === null) {
-    levelOneMinimumMoves = Math.floor(randomBetween(levelOneMinimumMoveLow, levelOneMinimumMoveHigh + 1));
-    window.halcyonLevelOneMinimumMoves = levelOneMinimumMoves;
-  }
-  generateObstacles();
-  generateSpiralSprite();
-  window.halcyonLevelMinimumMoves = minimumMovesForLevel(currentLevel);
-  updateHud();
-  updateTriangleLinks();
-  requestAnimationFrame(() => {
-    updateTriangleLinks();
-  });
-  requestAnimationFrame(rotateTriangle);
-  startTriangleTest();
+  await runTransition("fresh", event);
 }
 
 gameplay.addEventListener("pointermove", (event) => {
@@ -2233,7 +2516,7 @@ gameplay.addEventListener("pointermove", (event) => {
     event.preventDefault();
   }
 
-  if (draggedNode) {
+  if (draggedNode && !levelTransitioning) {
     moveAssetNodeFromInput(draggedNode, event);
   }
 
@@ -2254,7 +2537,7 @@ gameplay.addEventListener("touchmove", (event) => {
 
   event.preventDefault();
 
-  if (draggedNode) {
+  if (draggedNode && !levelTransitioning) {
     moveAssetNodeFromInput(draggedNode, event);
   }
 
@@ -2297,6 +2580,11 @@ window.addEventListener("resize", () => {
   updateTriangleLinks();
   positionHomeAnchorBackdrop();
 });
+document.addEventListener("pointermove", (event) => {
+  if (!eventIsTouch(event)) {
+    lastPointerClientPoint = eventClientPoint(event);
+  }
+}, { passive: true });
 document.addEventListener("visibilitychange", handleAudioVisibilityChange);
 assetNodes.forEach((node) => {
   const handle = node.querySelector(".asset-handle");
@@ -2314,17 +2602,21 @@ againButton.addEventListener("touchstart", restartGame, { passive: false });
 scoreForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
-  if (scoreSubmitted) {
+  if (scoreSubmitted || !showNameEntry || !qualifyingHighScoreRank) {
     return;
   }
 
   scoreSubmitted = true;
+  scoreSubmitButton.disabled = true;
 
   try {
     await submitHighScore(playerNameInput.value, finalScore);
     renderGameOverLeaderboard(await fetchTopThreeHighScores());
-    scoreForm.hidden = true;
+    setNameEntryVisible(false);
+    qualifyingHighScoreRank = null;
   } catch {
+    scoreSubmitted = false;
+    scoreSubmitButton.disabled = false;
     renderGameOverLeaderboard(null);
   }
 });

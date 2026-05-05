@@ -142,12 +142,17 @@
         </div>
         <div class="close-call-message" aria-live="polite">close call!</div>
         <div class="game-over-screen" aria-live="polite">
+          <div class="game-over-score-line">score: 0</div>
           <button class="again-button" type="button">again?</button>
-          <ol class="leaderboard-list"></ol>
-          <form class="score-form">
+          <div class="high-score-status" hidden>
+            <div>new high score, neat</div>
+            <div class="high-score-rank"></div>
+          </div>
+          <form class="score-form" hidden>
             <input class="player-name-input" name="player-name" maxlength="20" autocomplete="off" placeholder="name">
             <button class="score-submit-button" type="submit">submit</button>
           </form>
+          <ol class="leaderboard-list"></ol>
         </div>
         <div class="level-complete-screen" aria-live="polite">
           <div>level complete</div>
@@ -158,6 +163,6 @@
       </section>
     </main>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="game.js?v=2026-05-05-32"></script>
+    <script src="game.js?v=2026-05-05-39"></script>
   </body>
 </html>
