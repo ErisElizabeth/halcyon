@@ -17,6 +17,10 @@ const audioFiles = {
   playLoop: "assets/audio/halcyon_play_loop.ogg",
   lostLoop: "assets/audio/halcyon_lost_loop.ogg",
 };
+const audioVolumes = {
+  playLoop: 0.6,
+  lostLoop: 0.72,
+};
 const freezeOffsets = [0.2, 0.2, 0.02];
 const introPlaybackRate = 2;
 const obstacleCount = 50;
@@ -31,17 +35,22 @@ const triangleRotationRpm = 5;
 const triangleRotationRadiansPerSecond = triangleRotationRpm * 2 * Math.PI / 60;
 const lineFadeDuration = 1500;
 const rotationStartDelay = 100;
+const settleDuration = 1170;
+const videoReadyTimeout = 1800;
 
 const cursorState = {
   x: 0,
   y: 0,
 };
 let draggedNode = null;
+let draggedHandle = null;
 let suppressNextGameplayClick = false;
 let dragStartPoints = null;
 let dragStartSideLength = 0;
+let baseTriangleSideLength = 0;
 let rotationPaused = true;
 let lastRotationTime = null;
+let settleTimer = null;
 let gameOver = false;
 let gameStarted = false;
 let audioStarted = false;
@@ -60,6 +69,7 @@ let webAudioLoopOffset = 0;
 Object.values(audioElements).forEach((track) => {
   track.volume = 0.6;
 });
+audioElements.lostLoop.volume = audioVolumes.lostLoop;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -73,9 +83,15 @@ function playElementAudio(track) {
 
 function ensureAudioContext() {
   if (!audioContext) {
-    audioContext = new AudioContext();
+    const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioContextConstructor) {
+      return null;
+    }
+
+    audioContext = new AudioContextConstructor();
     audioGain = audioContext.createGain();
-    audioGain.gain.value = 0.6;
+    audioGain.gain.value = audioVolumes.playLoop;
     audioGain.connect(audioContext.destination);
   }
 
@@ -84,6 +100,10 @@ function ensureAudioContext() {
 
 function loadAudioBuffers() {
   const context = ensureAudioContext();
+
+  if (!context) {
+    return Promise.resolve(null);
+  }
 
   if (!audioBuffersPromise) {
     audioBuffersPromise = Promise.all(
@@ -119,11 +139,17 @@ function stopWebAudioLoop() {
 
 function startWebAudioLoop(name, offset = 0) {
   const context = ensureAudioContext();
+
+  if (!context) {
+    return;
+  }
+
   const source = context.createBufferSource();
   const buffer = audioBuffers[name];
   const marker = buffer.duration > 0 ? offset % buffer.duration : 0;
 
   stopWebAudioLoop();
+  audioGain.gain.setValueAtTime(audioVolumes[name], context.currentTime);
   source.buffer = buffer;
   source.loop = true;
   source.connect(audioGain);
@@ -247,6 +273,37 @@ function moveLockedCursor(deltaX, deltaY) {
 function centerCursor() {
   const bounds = playableBounds();
   moveCursor((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2);
+}
+
+function eventClientPoint(event) {
+  const touch = event.changedTouches?.[0] || event.touches?.[0];
+
+  if (touch) {
+    return {
+      x: touch.clientX,
+      y: touch.clientY,
+    };
+  }
+
+  return {
+    x: event.clientX,
+    y: event.clientY,
+  };
+}
+
+function moveCursorToInput(event) {
+  if (!event) {
+    centerCursor();
+    return;
+  }
+
+  const point = eventClientPoint(event);
+  const bounds = playableBounds();
+  moveCursor(point.x - bounds.rect.left, point.y - bounds.rect.top);
+}
+
+function eventIsTouch(event) {
+  return event.pointerType === "touch" || event.type.startsWith("touch");
 }
 
 function randomBetween(min, max) {
@@ -443,6 +500,12 @@ function moveAssetNode(node, clientX, clientY) {
   updateTriangleLinks();
 }
 
+function moveAssetNodeFromInput(node, event) {
+  const point = eventClientPoint(event);
+
+  moveAssetNode(node, point.x, point.y);
+}
+
 function nodePoint(node) {
   const rect = node.getBoundingClientRect();
   const gameplayRect = gameplay.getBoundingClientRect();
@@ -453,7 +516,7 @@ function nodePoint(node) {
   };
 }
 
-function animateTriangleLinks(duration = 450) {
+function animateTriangleLinks(duration = settleDuration) {
   const startedAt = performance.now();
 
   function tick(now) {
@@ -549,6 +612,107 @@ function setNodePosition(node, point) {
   node.style.top = `${point.y}px`;
 }
 
+function fallbackEquilateralPlacement(anchorIndex, endPoint) {
+  const startPoint = dragStartPoints[anchorIndex];
+  const otherIndexes = assetNodes
+    .map((node, index) => index)
+    .filter((index) => index !== anchorIndex);
+  const placements = otherIndexes.map((nearIndex) => {
+    const farIndex = otherIndexes.find((index) => index !== nearIndex);
+    const nearTarget = {
+      x: endPoint.x + dragStartPoints[nearIndex].x - startPoint.x,
+      y: endPoint.y + dragStartPoints[nearIndex].y - startPoint.y,
+    };
+    const farTarget = {
+      x: endPoint.x + dragStartPoints[farIndex].x - startPoint.x,
+      y: endPoint.y + dragStartPoints[farIndex].y - startPoint.y,
+    };
+    const deltaX = nearTarget.x - endPoint.x;
+    const deltaY = nearTarget.y - endPoint.y;
+    const distance = Math.hypot(deltaX, deltaY) || 1;
+    const corner = {
+      x: endPoint.x + deltaX / distance * dragStartSideLength,
+      y: endPoint.y + deltaY / distance * dragStartSideLength,
+    };
+    const thirdPoint = equilateralOptions(endPoint, corner).reduce((best, option) => (
+      distanceBetween(option, farTarget) < distanceBetween(best, farTarget)
+        ? option
+        : best
+    ));
+
+    return {
+      nearIndex,
+      farIndex,
+      corner,
+      thirdPoint,
+      score: distanceBetween(corner, nearTarget) + distanceBetween(thirdPoint, farTarget),
+    };
+  });
+
+  return placements.reduce((best, option) => (
+    option.score < best.score ? option : best
+  ), placements[0]);
+}
+
+function angleAtPoint(center, first, second) {
+  const firstX = first.x - center.x;
+  const firstY = first.y - center.y;
+  const secondX = second.x - center.x;
+  const secondY = second.y - center.y;
+  const firstLength = Math.hypot(firstX, firstY);
+  const secondLength = Math.hypot(secondX, secondY);
+
+  if (firstLength === 0 || secondLength === 0) {
+    return 0;
+  }
+
+  const cosine = clamp(
+    (firstX * secondX + firstY * secondY) / (firstLength * secondLength),
+    -1,
+    1,
+  );
+
+  return Math.acos(cosine);
+}
+
+function placementIsStable(placement, anchorIndex, startPoint, endPoint) {
+  if (!placement || !Number.isFinite(placement.corner.x) || !Number.isFinite(placement.thirdPoint.x)) {
+    return false;
+  }
+
+  const minReleaseAngle = Math.PI / 6;
+  const movedAngle = angleAtPoint(endPoint, startPoint, placement.corner);
+  const sideTolerance = Math.max(0.75, dragStartSideLength * 0.03);
+  const sides = [
+    distanceBetween(endPoint, placement.corner),
+    distanceBetween(placement.corner, placement.thirdPoint),
+    distanceBetween(placement.thirdPoint, endPoint),
+  ];
+  const sideLengthsAreStable = sides.every((side) => (
+    Math.abs(side - dragStartSideLength) <= sideTolerance
+  ));
+
+  return (
+    placement.nearIndex !== anchorIndex
+    && placement.farIndex !== anchorIndex
+    && placement.nearIndex !== placement.farIndex
+    && movedAngle >= minReleaseAngle
+    && sideLengthsAreStable
+  );
+}
+
+function resumeRotationAfterSettle() {
+  window.clearTimeout(settleTimer);
+  settleTimer = window.setTimeout(() => {
+    assetNodes.forEach((node) => node.classList.remove("settling"));
+
+    if (!draggedNode && !gameOver) {
+      rotationPaused = false;
+      lastRotationTime = null;
+    }
+  }, settleDuration);
+}
+
 function settleTriangleFromHypotenuse(anchorNode) {
   const anchorIndex = assetNodes.indexOf(anchorNode);
 
@@ -569,19 +733,6 @@ function settleTriangleFromHypotenuse(anchorNode) {
     endPoint,
     dragStartSideLength,
   );
-
-  if (candidates.length === 0) {
-    anchorNode.classList.add("settling");
-    setNodePosition(anchorNode, startPoint);
-
-    window.setTimeout(() => {
-      anchorNode.classList.remove("settling");
-      rotationPaused = false;
-    }, 450);
-
-    animateTriangleLinks();
-    return;
-  }
 
   const otherIndexes = assetNodes
     .map((node, index) => index)
@@ -607,21 +758,23 @@ function settleTriangleFromHypotenuse(anchorNode) {
       };
     });
   });
-  const placement = placements.reduce((best, option) => (
-    option.score < best.score ? option : best
-  ), placements[0]);
+  const placement = placements.length > 0
+    ? placements.reduce((best, option) => (
+      option.score < best.score ? option : best
+    ), placements[0])
+    : fallbackEquilateralPlacement(anchorIndex, endPoint);
+  const stablePlacement = placementIsStable(placement, anchorIndex, startPoint, endPoint)
+    ? placement
+    : fallbackEquilateralPlacement(anchorIndex, endPoint);
 
-  [placement.nearIndex, placement.farIndex].forEach((index) => {
+  [stablePlacement.nearIndex, stablePlacement.farIndex].forEach((index) => {
     assetNodes[index].classList.add("settling");
   });
 
-  setNodePosition(assetNodes[placement.nearIndex], placement.corner);
-  setNodePosition(assetNodes[placement.farIndex], placement.thirdPoint);
+  setNodePosition(assetNodes[stablePlacement.nearIndex], stablePlacement.corner);
+  setNodePosition(assetNodes[stablePlacement.farIndex], stablePlacement.thirdPoint);
 
-  window.setTimeout(() => {
-    assetNodes.forEach((node) => node.classList.remove("settling"));
-    rotationPaused = false;
-  }, 450);
+  resumeRotationAfterSettle();
 
   animateTriangleLinks();
 }
@@ -634,7 +787,7 @@ function rotateTriangle(now) {
   const elapsedSeconds = (now - lastRotationTime) / 1000;
   lastRotationTime = now;
 
-  if (!rotationPaused) {
+  if (!rotationPaused && !draggedNode) {
     const points = assetNodes.map(nodePoint);
     const center = triangleCenter(points);
     const angle = triangleRotationRadiansPerSecond * elapsedSeconds;
@@ -715,16 +868,22 @@ function startAssetDrag(event) {
 
   event.preventDefault();
   event.stopPropagation();
+  window.clearTimeout(settleTimer);
+  draggedHandle = event.currentTarget;
+  if (event.pointerId !== undefined) {
+    draggedHandle.setPointerCapture?.(event.pointerId);
+  }
   suppressNextGameplayClick = true;
   rotationPaused = true;
+  lastRotationTime = null;
   dragStartPoints = assetNodes.map(nodePoint);
-  dragStartSideLength = sideLengthFrom(dragStartPoints);
+  dragStartSideLength = baseTriangleSideLength || sideLengthFrom(dragStartPoints);
   assetNodes.forEach((node, index) => {
     node.classList.remove("settling");
     setNodePosition(node, dragStartPoints[index]);
   });
   draggedNode.classList.add("dragging");
-  moveAssetNode(draggedNode, event.clientX, event.clientY);
+  moveAssetNodeFromInput(draggedNode, event);
 }
 
 function stopAssetDrag() {
@@ -735,6 +894,7 @@ function stopAssetDrag() {
   const releasedNode = draggedNode;
   draggedNode.classList.remove("dragging");
   draggedNode = null;
+  draggedHandle = null;
   settleTriangleFromHypotenuse(releasedNode);
   dragStartPoints = null;
 }
@@ -749,6 +909,13 @@ function freezeVideo(video, freezeAt) {
 function fadeInLayer(element) {
   element.classList.add("visible");
   element.style.opacity = "0";
+
+  if (!element.animate) {
+    element.style.opacity = "";
+    return {
+      finished: Promise.resolve(),
+    };
+  }
 
   const fade = element.animate(
     [
@@ -777,24 +944,14 @@ function playTriangleVideo(index) {
     return;
   }
 
-  const freezeAt = Math.max(0, video.duration - freezeOffsets[index]);
+  const videoDuration = Number.isFinite(video.duration) && video.duration > 0
+    ? video.duration
+    : 1.2;
+  const freezeAt = Math.max(0, videoDuration - freezeOffsets[index]);
   let nextStarted = false;
 
-  video.currentTime = 0;
-  video.playbackRate = introPlaybackRate;
-  node.style.setProperty("--mask-shrink-duration", `${freezeAt / introPlaybackRate}s`);
-  node.classList.add("mask-tight");
-  video.classList.add("active");
-  const playback = video.play();
-
-  if (playback) {
-    playback.catch(() => {
-      gameplay.addEventListener("pointerdown", () => video.play(), { once: true });
-    });
-  }
-
-  video.addEventListener("timeupdate", () => {
-    if (nextStarted || video.currentTime < freezeAt) {
+  function finishVideo() {
+    if (nextStarted) {
       return;
     }
 
@@ -816,6 +973,29 @@ function playTriangleVideo(index) {
     }
 
     playTriangleVideo(index + 1);
+  }
+
+  video.currentTime = 0;
+  video.playbackRate = introPlaybackRate;
+  node.style.setProperty("--mask-shrink-duration", `${freezeAt / introPlaybackRate}s`);
+  node.classList.add("mask-tight");
+  video.classList.add("active");
+  const playback = video.play();
+
+  if (playback) {
+    playback.catch(() => {
+      window.setTimeout(finishVideo, 250);
+    });
+  }
+
+  window.setTimeout(finishVideo, freezeAt / introPlaybackRate * 1000 + 350);
+
+  video.addEventListener("timeupdate", () => {
+    if (nextStarted || video.currentTime < freezeAt) {
+      return;
+    }
+
+    finishVideo();
   });
 }
 
@@ -823,7 +1003,14 @@ function startTriangleTest() {
   const readyVideos = triangleVideos.map((video) => (
     video.readyState >= HTMLMediaElement.HAVE_METADATA
       ? Promise.resolve()
-      : new Promise((resolve) => video.addEventListener("loadedmetadata", resolve, { once: true }))
+      : new Promise((resolve) => {
+        const timeout = window.setTimeout(resolve, videoReadyTimeout);
+
+        video.addEventListener("loadedmetadata", () => {
+          window.clearTimeout(timeout);
+          resolve();
+        }, { once: true });
+      })
   ));
 
   Promise.all(readyVideos).then(() => {
@@ -831,16 +1018,18 @@ function startTriangleTest() {
   });
 }
 
-function startGame() {
+function startGame(event) {
   if (gameStarted) {
     return;
   }
 
+  event?.preventDefault();
   gameStarted = true;
   startScreen.classList.add("hidden");
   gameplay.classList.add("started", "active");
+  baseTriangleSideLength = sideLengthFrom(assetNodes.map(nodePoint));
   generateObstacles();
-  centerCursor();
+  moveCursorToInput(event);
   updateTriangleLinks();
   requestAnimationFrame(() => {
     updateTriangleLinks();
@@ -856,7 +1045,7 @@ gameplay.addEventListener("pointermove", (event) => {
   }
 
   if (draggedNode) {
-    moveAssetNode(draggedNode, event.clientX, event.clientY);
+    moveAssetNodeFromInput(draggedNode, event);
   }
 
   if (document.pointerLockElement === gameplay) {
@@ -864,12 +1053,22 @@ gameplay.addEventListener("pointermove", (event) => {
     return;
   }
 
-  const bounds = playableBounds();
-  moveCursor(
-    event.clientX - bounds.rect.left,
-    event.clientY - bounds.rect.top,
-  );
+  moveCursorToInput(event);
 });
+
+gameplay.addEventListener("touchmove", (event) => {
+  if (!gameStarted || gameOver) {
+    return;
+  }
+
+  event.preventDefault();
+
+  if (draggedNode) {
+    moveAssetNodeFromInput(draggedNode, event);
+  }
+
+  moveCursorToInput(event);
+}, { passive: false });
 
 gameplay.addEventListener("click", () => {
   if (!gameStarted || gameOver) {
@@ -882,7 +1081,6 @@ gameplay.addEventListener("click", () => {
   }
 
   gameplay.classList.add("active");
-  centerCursor();
 });
 
 document.addEventListener("pointerlockchange", () => {
@@ -894,9 +1092,18 @@ window.addEventListener("resize", () => {
   updateTriangleLinks();
 });
 assetNodes.forEach((node) => {
-  node.querySelector(".asset-handle").addEventListener("pointerdown", startAssetDrag);
+  const handle = node.querySelector(".asset-handle");
+
+  handle.addEventListener("pointerdown", startAssetDrag);
+
+  if (!window.PointerEvent) {
+    handle.addEventListener("touchstart", startAssetDrag, { passive: false });
+  }
 });
 playButton.addEventListener("click", startGame);
+playButton.addEventListener("touchend", startGame, { passive: false });
 document.addEventListener("pointerup", stopAssetDrag);
+document.addEventListener("touchend", stopAssetDrag);
+document.addEventListener("touchcancel", stopAssetDrag);
 centerCursor();
 updateTriangleLinks();

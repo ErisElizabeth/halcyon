@@ -2,12 +2,71 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>halcyon</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        background: #000000;
+      }
+
+      body {
+        overflow: hidden;
+        font-family: "Quicksand", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        touch-action: none;
+      }
+
+      .shell,
+      .gameplay,
+      .start-screen {
+        position: relative;
+        width: 100vw;
+        height: 100vh;
+        background: #000000;
+      }
+
+      .start-screen {
+        position: absolute;
+        inset: 0;
+        z-index: 6;
+        display: grid;
+        place-content: center;
+        gap: 1rem;
+        justify-items: center;
+        color: #D8DDD9;
+      }
+
+      .start-screen h1 {
+        margin: 0;
+        color: #D8DDD9;
+        font: inherit;
+        font-size: 1.8rem;
+        font-weight: 600;
+        letter-spacing: 0;
+      }
+
+      .play-button {
+        min-width: 7.5rem;
+        min-height: 3rem;
+        border: 0;
+        border-radius: 0;
+        background: #2F3432;
+        color: #D8DDD9;
+        font: inherit;
+        font-size: 1.5rem;
+        font-weight: 600;
+        letter-spacing: 0;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+    </style>
+    <link rel="stylesheet" href="styles.css?v=2026-05-05-2">
   </head>
   <body>
     <main class="shell" aria-label="halcyon">
@@ -57,6 +116,6 @@
         <audio id="lost-loop-audio" src="assets/audio/halcyon_lost_loop.ogg" preload="auto" loop></audio>
       </section>
     </main>
-    <script src="game.js"></script>
+    <script src="game.js?v=2026-05-05-2"></script>
   </body>
 </html>
