@@ -3,6 +3,7 @@ const startScreen = document.querySelector(".start-screen");
 const playButton = document.querySelector(".play-button");
 const cursor = document.querySelector(".cursor");
 const obstacleField = document.querySelector(".obstacle-field");
+const spiralField = document.querySelector(".spiral-field");
 const gameOverScreen = document.querySelector(".game-over-screen");
 const triangleLinksLayer = document.querySelector(".triangle-links");
 const triangleVideos = [...document.querySelectorAll(".triangle-video")];
@@ -25,6 +26,11 @@ const freezeOffsets = [0.2, 0.2, 0.02];
 const introPlaybackRate = 2;
 const obstacleCount = 50;
 const obstacleSize = 16;
+const spiralCount = 3;
+const spiralSize = 16;
+const spiralObstacleAvoidanceDiameter = 40;
+const spiralSpacing = 120;
+const spiralConsumeDuration = 300;
 const obstacleEdgeMargin = 34;
 const obstacleColors = [
   "#0000D1",
@@ -325,13 +331,22 @@ function createIrregularPolygon(sides) {
   return `polygon(${points.join(", ")})`;
 }
 
+function startAreaExclusion() {
+  const trianglePoints = assetNodes.map(nodePoint);
+  const center = triangleCenter(trianglePoints);
+  const radius = Math.max(...trianglePoints.map((point) => distanceBetween(point, center))) * 2;
+
+  return {
+    center,
+    radius,
+  };
+}
+
 function generateObstacles() {
   obstacleField.replaceChildren();
   const width = gameplay.clientWidth;
   const height = gameplay.clientHeight;
-  const trianglePoints = assetNodes.map(nodePoint);
-  const center = triangleCenter(trianglePoints);
-  const startRadius = Math.max(...trianglePoints.map((point) => distanceBetween(point, center))) * 2;
+  const startArea = startAreaExclusion();
   const columns = Math.ceil(Math.sqrt(obstacleCount * width / height) * 1.35);
   const rows = Math.ceil(obstacleCount / columns * 1.35);
   const playableWidth = Math.max(1, width - obstacleEdgeMargin * 2);
@@ -347,7 +362,7 @@ function generateObstacles() {
         y: obstacleEdgeMargin + (row + randomBetween(0.18, 0.82)) * cellHeight,
       };
 
-      if (distanceBetween(point, center) > startRadius + obstacleSize) {
+      if (distanceBetween(point, startArea.center) > startArea.radius + obstacleSize) {
         cells.push(point);
       }
     }
@@ -359,7 +374,7 @@ function generateObstacles() {
       y: randomBetween(obstacleEdgeMargin, Math.max(obstacleEdgeMargin, height - obstacleEdgeMargin)),
     };
 
-    if (distanceBetween(point, center) > startRadius + obstacleSize) {
+    if (distanceBetween(point, startArea.center) > startArea.radius + obstacleSize) {
       cells.push(point);
     }
   }
@@ -388,11 +403,92 @@ function generateObstacles() {
   }
 }
 
+function createSpiralSprite() {
+  const sprite = document.createElement("div");
+
+  sprite.className = "spiral-sprite";
+  sprite.innerHTML = `
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path class="spiral-depth" d="M8 8 C10.2 7.1 10.9 9.5 9.2 10.8 C6.9 12.7 3.9 10.7 4.3 7.7 C4.8 3.9 9.5 2.7 12.1 5.4 C14.9 8.4 13.3 13.1 9.4 14.1"></path>
+      <path class="spiral-core" d="M8 8 C10.2 7.1 10.9 9.5 9.2 10.8 C6.9 12.7 3.9 10.7 4.3 7.7 C4.8 3.9 9.5 2.7 12.1 5.4 C14.9 8.4 13.3 13.1 9.4 14.1"></path>
+      <circle class="spiral-highlight" cx="6.3" cy="5.2" r="1.1"></circle>
+    </svg>
+  `;
+
+  return sprite;
+}
+
+function generateSpiralSprite() {
+  spiralField.replaceChildren();
+  const width = gameplay.clientWidth;
+  const height = gameplay.clientHeight;
+  const startArea = startAreaExclusion();
+  const obstacleAvoidanceRadius = spiralObstacleAvoidanceDiameter / 2 + spiralSize / 2;
+  const obstacles = obstacleCenters();
+  const points = [];
+
+  for (let index = 0; index < spiralCount; index += 1) {
+    let point = null;
+    let bestFallback = null;
+    let bestFallbackScore = -Infinity;
+
+    for (let attempt = 0; attempt < 800; attempt += 1) {
+      const candidate = {
+        x: randomBetween(obstacleEdgeMargin, Math.max(obstacleEdgeMargin, width - obstacleEdgeMargin)),
+        y: randomBetween(obstacleEdgeMargin, Math.max(obstacleEdgeMargin, height - obstacleEdgeMargin)),
+      };
+      const startAreaDistance = distanceBetween(candidate, startArea.center);
+      const nearestSpiralDistance = points.length > 0
+        ? Math.min(...points.map((existingPoint) => distanceBetween(candidate, existingPoint)))
+        : Infinity;
+      const clearsStartArea = startAreaDistance > startArea.radius + obstacleSize;
+      const clearsObstacles = obstacles.every((obstacle) => (
+        distanceBetween(candidate, obstacle) >= obstacleAvoidanceRadius
+      ));
+      const clearsSpirals = nearestSpiralDistance >= spiralSpacing;
+      const fallbackScore = startAreaDistance + nearestSpiralDistance;
+
+      if (clearsStartArea && clearsObstacles && fallbackScore > bestFallbackScore) {
+        bestFallback = candidate;
+        bestFallbackScore = fallbackScore;
+      }
+
+      if (clearsStartArea && clearsObstacles && clearsSpirals) {
+        point = candidate;
+        break;
+      }
+    }
+
+    if (!point) {
+      point = bestFallback;
+    }
+
+    if (!point) {
+      continue;
+    }
+
+    points.push(point);
+
+    const sprite = createSpiralSprite();
+
+    sprite.style.left = `${point.x}px`;
+    sprite.style.top = `${point.y}px`;
+    spiralField.appendChild(sprite);
+  }
+}
+
 function obstacleCenters() {
   return [...obstacleField.querySelectorAll(".obstacle")].map((obstacle) => ({
     x: Number.parseFloat(obstacle.style.left),
     y: Number.parseFloat(obstacle.style.top),
   }));
+}
+
+function spiralCenter(sprite) {
+  return {
+    x: Number.parseFloat(sprite.style.left),
+    y: Number.parseFloat(sprite.style.top),
+  };
 }
 
 function circleIntersectsBox(circle, radius, boxCenter, boxSize) {
@@ -432,6 +528,37 @@ function checkObstacleCollisions(points = assetNodes.map(nodePoint)) {
   if (hit) {
     triggerGameOver();
   }
+}
+
+function consumeSpiral(sprite) {
+  if (!sprite || sprite.classList.contains("consumed")) {
+    return;
+  }
+
+  sprite.classList.add("consumed");
+
+  window.setTimeout(() => {
+    sprite.remove();
+  }, spiralConsumeDuration);
+}
+
+function checkSpiralCollisions(points = assetNodes.map(nodePoint)) {
+  const sprites = [...spiralField.querySelectorAll(".spiral-sprite:not(.consumed)")];
+
+  if (sprites.length === 0) {
+    return;
+  }
+
+  const collisionRadius = anchorRadius() + spiralSize / 2;
+
+  sprites.forEach((sprite) => {
+    const center = spiralCenter(sprite);
+    const hit = points.some((point) => distanceBetween(point, center) <= collisionRadius);
+
+    if (hit) {
+      consumeSpiral(sprite);
+    }
+  });
 }
 
 function captureRadius() {
@@ -850,6 +977,7 @@ function updateTriangleLinks() {
 
   updateTriangleCenter(points);
   checkObstacleCollisions(points);
+  checkSpiralCollisions(points);
 }
 
 function updateTriangleCenter(points = assetNodes.map(nodePoint)) {
@@ -961,6 +1089,7 @@ function playTriangleVideo(index) {
     if (index === triangleVideos.length - 1) {
       const legsFade = fadeInLayer(triangleLinksLayer);
       fadeInLayer(obstacleField);
+      fadeInLayer(spiralField);
 
       legsFade.finished.then(() => {
         window.setTimeout(() => {
@@ -1029,6 +1158,7 @@ function startGame(event) {
   gameplay.classList.add("started", "active");
   baseTriangleSideLength = sideLengthFrom(assetNodes.map(nodePoint));
   generateObstacles();
+  generateSpiralSprite();
   moveCursorToInput(event);
   updateTriangleLinks();
   requestAnimationFrame(() => {

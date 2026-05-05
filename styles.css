@@ -98,6 +98,7 @@ body {
 }
 
 .gameplay:not(.started) .obstacle-field,
+.gameplay:not(.started) .spiral-field,
 .gameplay:not(.started) .triangle-test,
 .gameplay:not(.started) .cursor,
 .gameplay:not(.started) .hint {
@@ -130,6 +131,67 @@ body {
 
 .obstacle-field.visible {
   opacity: 1;
+}
+
+.spiral-field {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1.5s ease;
+}
+
+.spiral-field.visible {
+  opacity: 1;
+}
+
+.spiral-sprite {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  translate: -50% -50%;
+  scale: 1;
+  pointer-events: none;
+  filter:
+    drop-shadow(0 0 3px rgba(57, 255, 136, 0.95))
+    drop-shadow(0 2px 2px rgba(0, 0, 0, 0.82));
+  animation: spiral-spin 1.4s linear infinite;
+}
+
+.spiral-sprite.consumed {
+  animation:
+    spiral-spin 1.4s linear infinite,
+    spiral-consume 0.3s ease-in forwards;
+}
+
+.spiral-sprite svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  overflow: visible;
+}
+
+.spiral-depth {
+  fill: none;
+  stroke: #052412;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3.4;
+  transform: translate(0.7px, 1px);
+}
+
+.spiral-core {
+  fill: none;
+  stroke: #39ff88;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.4;
+}
+
+.spiral-highlight {
+  fill: #d7ffe4;
+  opacity: 0.9;
 }
 
 .obstacle {
@@ -333,5 +395,18 @@ body {
 @keyframes asset-spin {
   to {
     rotate: 360deg;
+  }
+}
+
+@keyframes spiral-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+@keyframes spiral-consume {
+  to {
+    scale: 0;
+    opacity: 0;
   }
 }
