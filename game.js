@@ -1,6 +1,7 @@
 const gameplay = document.querySelector("#gameplay");
 const startScreen = document.querySelector(".start-screen");
 const playButton = document.querySelector(".play-button");
+const levelTitle = document.querySelector(".level-title");
 const cursor = document.querySelector(".cursor");
 const obstacleField = document.querySelector(".obstacle-field");
 const spiralField = document.querySelector(".spiral-field");
@@ -42,6 +43,7 @@ const triangleRotationRadiansPerSecond = triangleRotationRpm * 2 * Math.PI / 60;
 const lineFadeDuration = 1500;
 const rotationStartDelay = 100;
 const settleDuration = 1170;
+const levelTitleDuration = 1000;
 const videoReadyTimeout = 1800;
 
 const cursorState = {
@@ -1147,7 +1149,20 @@ function startTriangleTest() {
   });
 }
 
-function startGame(event) {
+function showLevelTitle() {
+  levelTitle.classList.remove("showing");
+  levelTitle.offsetWidth;
+  levelTitle.classList.add("showing");
+
+  return new Promise((resolve) => {
+    window.setTimeout(() => {
+      levelTitle.classList.remove("showing");
+      resolve();
+    }, levelTitleDuration);
+  });
+}
+
+async function startGame(event) {
   if (gameStarted) {
     return;
   }
@@ -1157,15 +1172,16 @@ function startGame(event) {
   startScreen.classList.add("hidden");
   gameplay.classList.add("started", "active");
   baseTriangleSideLength = sideLengthFrom(assetNodes.map(nodePoint));
+  moveCursorToInput(event);
+  startPlayAudio();
+  await showLevelTitle();
   generateObstacles();
   generateSpiralSprite();
-  moveCursorToInput(event);
   updateTriangleLinks();
   requestAnimationFrame(() => {
     updateTriangleLinks();
   });
   requestAnimationFrame(rotateTriangle);
-  startPlayAudio();
   startTriangleTest();
 }
 

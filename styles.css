@@ -76,6 +76,25 @@ body {
   letter-spacing: 0;
 }
 
+.level-title {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  color: #D8DDD9;
+  font: inherit;
+  font-size: 1.8rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.level-title.showing {
+  animation: level-title-sequence 1s ease both;
+}
+
 .play-button {
   min-width: 7.5rem;
   min-height: 3rem;
@@ -407,6 +426,21 @@ body {
 @keyframes spiral-consume {
   to {
     scale: 0;
+    opacity: 0;
+  }
+}
+
+@keyframes level-title-sequence {
+  0% {
+    opacity: 0;
+  }
+
+  25%,
+  75% {
+    opacity: 1;
+  }
+
+  100% {
     opacity: 0;
   }
 }
