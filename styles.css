@@ -1,0 +1,95 @@
+:root {
+  color-scheme: light;
+  --background: #E8DCC6;
+  --border: #D8E2D0;
+  --glow: #FFFDF4;
+  --ink: #5e604f;
+  --bar: clamp(28px, 4.2vh, 42px);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--background);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.shell {
+  width: 100vw;
+  height: 100vh;
+  padding: var(--bar);
+  background: var(--background);
+}
+
+.gameplay {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  cursor: none;
+  background: linear-gradient(180deg, rgba(255, 253, 244, 0.42), rgba(232, 220, 198, 0.08));
+  border: var(--bar) solid var(--border);
+  box-shadow:
+    0 24px 56px rgba(117, 104, 77, 0.24),
+    inset 0 0 42px 14px var(--glow),
+    inset 0 2px 0 rgba(255, 253, 244, 0.85),
+    inset 0 -2px 0 rgba(115, 128, 103, 0.18);
+}
+
+.gameplay::before {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--bar));
+  pointer-events: none;
+  box-shadow:
+    inset 0 6px 0 rgba(255, 253, 244, 0.72),
+    inset 0 -8px 0 rgba(116, 130, 103, 0.18),
+    inset 6px 0 0 rgba(255, 253, 244, 0.45),
+    inset -7px 0 0 rgba(116, 130, 103, 0.14);
+}
+
+.cursor {
+  position: absolute;
+  z-index: 2;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+  translate: -50% -50%;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow: 0 0 14px rgba(255, 253, 244, 0.9);
+}
+
+.gameplay.active .cursor,
+.gameplay:hover .cursor {
+  opacity: 1;
+}
+
+.hint {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  margin: 0;
+  translate: -50% -50%;
+  color: rgba(94, 96, 79, 0.6);
+  font-size: 0.9rem;
+  letter-spacing: 0;
+  user-select: none;
+  pointer-events: none;
+}
+
+.gameplay.active .hint {
+  opacity: 0;
+}
