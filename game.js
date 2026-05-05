@@ -32,9 +32,19 @@ const audioElements = {
   playLoop: document.querySelector("#play-loop-audio"),
   lostLoop: document.querySelector("#lost-loop-audio"),
 };
+const audioSourceOptions = {
+  playLoop: [
+    { url: "assets/audio/halcyon_play_loop.ogg", type: "audio/ogg" },
+    { url: "assets/audio/halcyon_play_loop.mp3", type: "audio/mpeg" },
+  ],
+  lostLoop: [
+    { url: "assets/audio/halcyon_lost_loop.ogg", type: "audio/ogg" },
+    { url: "assets/audio/halcyon_lost_loop.mp3", type: "audio/mpeg" },
+  ],
+};
 const audioFiles = {
-  playLoop: "assets/audio/halcyon_play_loop.ogg",
-  lostLoop: "assets/audio/halcyon_lost_loop.ogg",
+  playLoop: chooseAudioSource(audioSourceOptions.playLoop),
+  lostLoop: chooseAudioSource(audioSourceOptions.lostLoop),
 };
 const audioVolumes = {
   playLoop: 0.6,
@@ -135,19 +145,43 @@ let rotationLoopStarted = false;
 let visualGeneration = 0;
 const collisionTestKeys = new Set();
 
-Object.values(audioElements).forEach((track) => {
-  track.volume = 0.6;
+Object.entries(audioElements).forEach(([name, track]) => {
+  track.src = audioFiles[name];
+  track.volume = audioVolumes[name];
+  track.load();
 });
-audioElements.lostLoop.volume = audioVolumes.lostLoop;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function supportsAudioType(type) {
+  const tester = document.createElement("audio");
+
+  return tester.canPlayType(type) !== "";
+}
+
+function chooseAudioSource(options) {
+  return options.find((option) => supportsAudioType(option.type))?.url || options[0].url;
+}
+
+function shouldUseElementAudioPath() {
+  return window.matchMedia?.("(pointer: coarse)")?.matches || audioFiles.playLoop.endsWith(".mp3");
 }
 
 function playElementAudio(track) {
   const playback = track.play();
 
   playback?.catch(() => {});
+  return playback;
+}
+
+function markAudioStartFailedOnReject(playback) {
+  playback?.catch(() => {
+    if (activeAudioMode === "element" && !lostAudioStarted) {
+      audioStarted = false;
+    }
+  });
 }
 
 function elementVolumeFor(track) {
@@ -316,6 +350,15 @@ async function startPlayAudio() {
 
   audioStarted = true;
 
+  if (shouldUseElementAudioPath()) {
+    activeAudioMode = "element";
+    activeAudio = audioElements.playLoop;
+    audioElements.playLoop.currentTime = 0;
+    audioElements.playLoop.volume = audioVolumes.playLoop * audioOutputScale;
+    markAudioStartFailedOnReject(playElementAudio(audioElements.playLoop));
+    return;
+  }
+
   try {
     const context = ensureAudioContext();
 
@@ -334,7 +377,7 @@ async function startPlayAudio() {
   activeAudio = audioElements.playLoop;
   audioElements.playLoop.currentTime = 0;
   audioElements.playLoop.volume = audioVolumes.playLoop * audioOutputScale;
-  playElementAudio(audioElements.playLoop);
+  markAudioStartFailedOnReject(playElementAudio(audioElements.playLoop));
 }
 
 function switchToLostAudio() {
@@ -378,6 +421,12 @@ function handleAudioVisibilityChange() {
   }
 
   fadeAudioOutput(1);
+}
+
+function retryPlayAudioFromGesture() {
+  if (gameStarted && !gameOver && !audioStarted) {
+    startPlayAudio();
+  }
 }
 
 function cssPixelValue(name) {
@@ -2585,6 +2634,8 @@ document.addEventListener("pointermove", (event) => {
     lastPointerClientPoint = eventClientPoint(event);
   }
 }, { passive: true });
+document.addEventListener("pointerdown", retryPlayAudioFromGesture, { passive: true });
+document.addEventListener("touchstart", retryPlayAudioFromGesture, { passive: true });
 document.addEventListener("visibilitychange", handleAudioVisibilityChange);
 assetNodes.forEach((node) => {
   const handle = node.querySelector(".asset-handle");
