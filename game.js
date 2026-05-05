@@ -6,6 +6,10 @@ const cursor = document.querySelector(".cursor");
 const obstacleField = document.querySelector(".obstacle-field");
 const spiralField = document.querySelector(".spiral-field");
 const gameOverScreen = document.querySelector(".game-over-screen");
+const levelCompleteScreen = document.querySelector(".level-complete-screen");
+const scoreLine = document.querySelector(".score-line");
+const minimumMovesValue = document.querySelector(".minimum-moves-value");
+const playerMovesValue = document.querySelector(".player-moves-value");
 const triangleLinksLayer = document.querySelector(".triangle-links");
 const triangleVideos = [...document.querySelectorAll(".triangle-video")];
 const assetNodes = [...document.querySelectorAll(".asset-node")];
@@ -45,6 +49,16 @@ const rotationStartDelay = 100;
 const settleDuration = 1170;
 const levelTitleDuration = 1000;
 const videoReadyTimeout = 1800;
+const explosionSource = "assets/explode.mp4";
+const explosionSlowdown = 2.5;
+const explosionDuration = 11 / 24 * 1000 * explosionSlowdown;
+const explosionReadyTimeout = 120;
+const solverMaxDepth = 6;
+const solverMaxStates = 1400;
+const solverGridColumns = 5;
+const solverGridRows = 4;
+const levelOneMinimumMoveLow = 23;
+const levelOneMinimumMoveHigh = 25;
 
 const cursorState = {
   x: 0,
@@ -59,10 +73,15 @@ let baseTriangleSideLength = 0;
 let rotationPaused = true;
 let lastRotationTime = null;
 let settleTimer = null;
+let triangleSettling = false;
 let gameOver = false;
 let gameStarted = false;
 let audioStarted = false;
 let lostAudioStarted = false;
+let levelOneMinimumMoves = null;
+let playerMoves = 0;
+let levelComplete = false;
+const pendingCapturedSpirals = new Set();
 let activeAudio = audioElements.playLoop;
 let audioContext = null;
 let audioGain = null;
@@ -512,10 +531,81 @@ function triggerGameOver() {
 
   gameOver = true;
   rotationPaused = true;
+  triangleSettling = false;
+  window.clearTimeout(settleTimer);
+  assetNodes.forEach((node) => node.classList.remove("settling"));
   draggedNode?.classList.remove("dragging");
   draggedNode = null;
   switchToLostAudio();
-  gameOverScreen.classList.add("visible");
+  playGameOverExplosion();
+}
+
+function fadeOutTriangleLinks() {
+  triangleLinksLayer.classList.add("visible");
+  triangleLinksLayer.style.opacity = "1";
+
+  if (!triangleLinksLayer.animate) {
+    triangleLinksLayer.style.opacity = "0";
+    triangleLinksLayer.classList.remove("visible");
+    return Promise.resolve();
+  }
+
+  const fade = triangleLinksLayer.animate(
+    [
+      { opacity: 1 },
+      { opacity: 0 },
+    ],
+    {
+      duration: explosionDuration,
+      easing: "linear",
+      fill: "forwards",
+    },
+  );
+
+  return fade.finished.then(() => {
+    triangleLinksLayer.style.opacity = "0";
+    triangleLinksLayer.classList.remove("visible");
+  }).catch(() => {});
+}
+
+function playExplosionVideo(video) {
+  const node = video.closest(".asset-node");
+
+  video.pause();
+  node?.classList.remove("mask-tight");
+  video.classList.remove("exploding");
+  video.src = explosionSource;
+  video.loop = false;
+  video.playbackRate = 1 / explosionSlowdown;
+
+  function startExplosion() {
+    video.removeEventListener("canplay", startExplosion);
+    video.removeEventListener("loadeddata", startExplosion);
+    video.currentTime = 0;
+    video.classList.remove("frozen");
+    video.classList.add("active", "exploding");
+
+    const playback = video.play();
+
+    playback?.catch(() => {});
+  }
+
+  video.addEventListener("loadeddata", startExplosion, { once: true });
+  video.addEventListener("canplay", startExplosion, { once: true });
+  video.load();
+  window.setTimeout(startExplosion, explosionReadyTimeout);
+}
+
+function playGameOverExplosion() {
+  fadeOutTriangleLinks().then(() => {
+    gameOverScreen.classList.add("visible");
+  });
+
+  triangleVideos.forEach(playExplosionVideo);
+
+  window.setTimeout(() => {
+    gameOverScreen.classList.add("visible");
+  }, explosionDuration);
 }
 
 function checkObstacleCollisions(points = assetNodes.map(nodePoint)) {
@@ -540,10 +630,44 @@ function consumeSpiral(sprite) {
   }
 
   sprite.classList.add("consumed");
+  checkLevelComplete();
 
   window.setTimeout(() => {
     sprite.remove();
   }, spiralConsumeDuration);
+}
+
+function levelScore() {
+  if (!levelOneMinimumMoves || playerMoves <= 0) {
+    return 0;
+  }
+
+  return Math.floor(levelOneMinimumMoves / playerMoves * 100);
+}
+
+function updateMoveHud() {
+  minimumMovesValue.textContent = levelOneMinimumMoves ?? "?";
+  playerMovesValue.textContent = playerMoves;
+}
+
+function checkLevelComplete() {
+  if (levelComplete || gameOver) {
+    return;
+  }
+
+  const remainingSprites = spiralField.querySelectorAll(".spiral-sprite:not(.consumed)").length;
+
+  if (remainingSprites > 0) {
+    return;
+  }
+
+  levelComplete = true;
+  rotationPaused = true;
+  triangleSettling = false;
+  window.clearTimeout(settleTimer);
+  updateMoveHud();
+  scoreLine.textContent = `score ${levelScore()}`;
+  levelCompleteScreen.classList.add("visible");
 }
 
 function checkSpiralCollisions(points = assetNodes.map(nodePoint)) {
@@ -560,9 +684,25 @@ function checkSpiralCollisions(points = assetNodes.map(nodePoint)) {
     const hit = points.some((point) => distanceBetween(point, center) <= collisionRadius);
 
     if (hit) {
+      if (triangleSettling) {
+        pendingCapturedSpirals.add(sprite);
+        return;
+      }
+
       consumeSpiral(sprite);
     }
   });
+}
+
+function consumePendingSpirals() {
+  pendingCapturedSpirals.forEach((sprite) => {
+    consumeSpiral(sprite);
+  });
+  pendingCapturedSpirals.clear();
+}
+
+function collectCenters() {
+  return [...spiralField.querySelectorAll(".spiral-sprite")].map(spiralCenter);
 }
 
 function captureRadius() {
@@ -832,12 +972,345 @@ function placementIsStable(placement, anchorIndex, startPoint, endPoint) {
   );
 }
 
+function clonePoints(points) {
+  return points.map((point) => ({
+    x: point.x,
+    y: point.y,
+  }));
+}
+
+function pointInBounds(point) {
+  const radius = captureRadius();
+
+  return {
+    x: clamp(point.x, radius, gameplay.clientWidth - radius),
+    y: clamp(point.y, radius, gameplay.clientHeight - radius),
+  };
+}
+
+function fallbackPlacementForPoints(points, anchorIndex, endPoint, sideLength) {
+  const startPoint = points[anchorIndex];
+  const otherIndexes = points
+    .map((point, index) => index)
+    .filter((index) => index !== anchorIndex);
+  const placements = otherIndexes.map((nearIndex) => {
+    const farIndex = otherIndexes.find((index) => index !== nearIndex);
+    const nearTarget = {
+      x: endPoint.x + points[nearIndex].x - startPoint.x,
+      y: endPoint.y + points[nearIndex].y - startPoint.y,
+    };
+    const farTarget = {
+      x: endPoint.x + points[farIndex].x - startPoint.x,
+      y: endPoint.y + points[farIndex].y - startPoint.y,
+    };
+    const deltaX = nearTarget.x - endPoint.x;
+    const deltaY = nearTarget.y - endPoint.y;
+    const distance = Math.hypot(deltaX, deltaY) || 1;
+    const corner = {
+      x: endPoint.x + deltaX / distance * sideLength,
+      y: endPoint.y + deltaY / distance * sideLength,
+    };
+    const thirdPoint = equilateralOptions(endPoint, corner).reduce((best, option) => (
+      distanceBetween(option, farTarget) < distanceBetween(best, farTarget)
+        ? option
+        : best
+    ));
+
+    return {
+      nearIndex,
+      farIndex,
+      corner,
+      thirdPoint,
+      score: distanceBetween(corner, nearTarget) + distanceBetween(thirdPoint, farTarget),
+    };
+  });
+
+  return placements.reduce((best, option) => (
+    option.score < best.score ? option : best
+  ), placements[0]);
+}
+
+function placementIsStableForPoints(placement, anchorIndex, startPoint, endPoint, sideLength) {
+  if (!placement || !Number.isFinite(placement.corner.x) || !Number.isFinite(placement.thirdPoint.x)) {
+    return false;
+  }
+
+  const minReleaseAngle = Math.PI / 6;
+  const movedAngle = angleAtPoint(endPoint, startPoint, placement.corner);
+  const sideTolerance = Math.max(0.75, sideLength * 0.03);
+  const sides = [
+    distanceBetween(endPoint, placement.corner),
+    distanceBetween(placement.corner, placement.thirdPoint),
+    distanceBetween(placement.thirdPoint, endPoint),
+  ];
+  const sideLengthsAreStable = sides.every((side) => (
+    Math.abs(side - sideLength) <= sideTolerance
+  ));
+
+  return (
+    placement.nearIndex !== anchorIndex
+    && placement.farIndex !== anchorIndex
+    && placement.nearIndex !== placement.farIndex
+    && movedAngle >= minReleaseAngle
+    && sideLengthsAreStable
+  );
+}
+
+function simulateTriangleMove(points, anchorIndex, destination) {
+  const startPoint = points[anchorIndex];
+  const endPoint = pointInBounds(destination);
+  const movementDistance = distanceBetween(startPoint, endPoint);
+  const movementCircle = {
+    x: (startPoint.x + endPoint.x) / 2,
+    y: (startPoint.y + endPoint.y) / 2,
+  };
+  const candidates = circleIntersections(
+    movementCircle,
+    movementDistance / 2,
+    endPoint,
+    baseTriangleSideLength,
+  );
+  const otherIndexes = points
+    .map((point, index) => index)
+    .filter((index) => index !== anchorIndex);
+  const placements = candidates.flatMap((corner) => {
+    return otherIndexes.map((nearIndex) => {
+      const farIndex = otherIndexes.find((index) => index !== nearIndex);
+      const thirdOptions = equilateralOptions(endPoint, corner);
+      const thirdPoint = thirdOptions.reduce((best, option) => {
+        return distanceBetween(option, points[farIndex]) < distanceBetween(best, points[farIndex])
+          ? option
+          : best;
+      }, thirdOptions[0]);
+
+      return {
+        nearIndex,
+        farIndex,
+        corner,
+        thirdPoint,
+        score: distanceBetween(corner, points[nearIndex]) + distanceBetween(thirdPoint, points[farIndex]),
+      };
+    });
+  });
+  const placement = placements.length > 0
+    ? placements.reduce((best, option) => (
+      option.score < best.score ? option : best
+    ), placements[0])
+    : fallbackPlacementForPoints(points, anchorIndex, endPoint, baseTriangleSideLength);
+  const stablePlacement = placementIsStableForPoints(placement, anchorIndex, startPoint, endPoint, baseTriangleSideLength)
+    ? placement
+    : fallbackPlacementForPoints(points, anchorIndex, endPoint, baseTriangleSideLength);
+  const nextPoints = clonePoints(points);
+
+  nextPoints[anchorIndex] = endPoint;
+  nextPoints[stablePlacement.nearIndex] = stablePlacement.corner;
+  nextPoints[stablePlacement.farIndex] = stablePlacement.thirdPoint;
+
+  return nextPoints;
+}
+
+function triangleHitsObstacles(points, obstacles = obstacleCenters()) {
+  const radius = anchorRadius();
+
+  return points.some((point) => (
+    obstacles.some((obstacle) => circleIntersectsBox(point, radius, obstacle, obstacleSize))
+  ));
+}
+
+function collectedMaskForPoints(points, collectPoints, mask) {
+  const collectionRadius = anchorRadius() + spiralSize / 2;
+  let nextMask = mask;
+
+  collectPoints.forEach((collectPoint, index) => {
+    if (nextMask & (1 << index)) {
+      return;
+    }
+
+    if (points.some((point) => distanceBetween(point, collectPoint) <= collectionRadius)) {
+      nextMask |= 1 << index;
+    }
+  });
+
+  return nextMask;
+}
+
+function moveIsClearAndCollected(startPoints, endPoints, anchorIndex, collectPoints, mask, obstacles) {
+  const dragSteps = 12;
+  const settleSteps = 16;
+  let nextMask = mask;
+
+  for (let step = 1; step <= dragSteps; step += 1) {
+    const progress = step / dragSteps;
+    const sampledPoints = clonePoints(startPoints);
+
+    sampledPoints[anchorIndex] = {
+      x: startPoints[anchorIndex].x + (endPoints[anchorIndex].x - startPoints[anchorIndex].x) * progress,
+      y: startPoints[anchorIndex].y + (endPoints[anchorIndex].y - startPoints[anchorIndex].y) * progress,
+    };
+
+    if (triangleHitsObstacles(sampledPoints, obstacles)) {
+      return null;
+    }
+
+    nextMask = collectedMaskForPoints(sampledPoints, collectPoints, nextMask);
+  }
+
+  for (let step = 1; step <= settleSteps; step += 1) {
+    const progress = step / settleSteps;
+    const sampledPoints = startPoints.map((point, index) => {
+      const start = index === anchorIndex ? endPoints[index] : point;
+      const end = endPoints[index];
+
+      return {
+        x: start.x + (end.x - start.x) * progress,
+        y: start.y + (end.y - start.y) * progress,
+      };
+    });
+
+    if (triangleHitsObstacles(sampledPoints, obstacles)) {
+      return null;
+    }
+
+    nextMask = collectedMaskForPoints(sampledPoints, collectPoints, nextMask);
+  }
+
+  return nextMask;
+}
+
+function solverCandidateTargets(collectPoints) {
+  const candidates = [];
+  const seen = new Set();
+
+  function addCandidate(point) {
+    const bounded = pointInBounds(point);
+    const key = `${Math.round(bounded.x)}:${Math.round(bounded.y)}`;
+
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    candidates.push(bounded);
+  }
+
+  collectPoints.forEach((point) => {
+    addCandidate(point);
+
+    [24, 48].forEach((radius) => {
+      for (let index = 0; index < 8; index += 1) {
+        const angle = index / 8 * 2 * Math.PI;
+
+        addCandidate({
+          x: point.x + Math.cos(angle) * radius,
+          y: point.y + Math.sin(angle) * radius,
+        });
+      }
+    });
+  });
+
+  for (let row = 1; row <= solverGridRows; row += 1) {
+    for (let column = 1; column <= solverGridColumns; column += 1) {
+      addCandidate({
+        x: gameplay.clientWidth * column / (solverGridColumns + 1),
+        y: gameplay.clientHeight * row / (solverGridRows + 1),
+      });
+    }
+  }
+
+  return candidates;
+}
+
+function solverStateKey(points, mask) {
+  return `${mask}|${points.map((point) => (
+    `${Math.round(point.x / 12)}:${Math.round(point.y / 12)}`
+  )).join("|")}`;
+}
+
+function calculateLevelMinimumMoves() {
+  const collectPoints = collectCenters();
+
+  if (collectPoints.length === 0 || !baseTriangleSideLength) {
+    return null;
+  }
+
+  const targets = solverCandidateTargets(collectPoints);
+  const allCollectedMask = (1 << collectPoints.length) - 1;
+  const startPoints = assetNodes.map(nodePoint);
+  const startMask = collectedMaskForPoints(startPoints, collectPoints, 0);
+
+  function searchMinimumMoves(obstacles) {
+    const queue = [{
+      points: startPoints,
+      mask: startMask,
+      moves: 0,
+    }];
+    const visited = new Set([solverStateKey(startPoints, startMask)]);
+    let cursor = 0;
+
+    while (cursor < queue.length && cursor < solverMaxStates) {
+      const state = queue[cursor];
+
+      cursor += 1;
+
+      if (state.mask === allCollectedMask) {
+        return state.moves;
+      }
+
+      if (state.moves >= solverMaxDepth) {
+        continue;
+      }
+
+      for (let anchorIndex = 0; anchorIndex < state.points.length; anchorIndex += 1) {
+        for (let targetIndex = 0; targetIndex < targets.length; targetIndex += 1) {
+          const nextPoints = simulateTriangleMove(state.points, anchorIndex, targets[targetIndex]);
+          const nextMask = moveIsClearAndCollected(state.points, nextPoints, anchorIndex, collectPoints, state.mask, obstacles);
+
+          if (nextMask === null) {
+            continue;
+          }
+
+          const key = solverStateKey(nextPoints, nextMask);
+
+          if (visited.has(key)) {
+            continue;
+          }
+
+          visited.add(key);
+          queue.push({
+            points: nextPoints,
+            mask: nextMask,
+            moves: state.moves + 1,
+          });
+
+          if (nextMask === allCollectedMask) {
+            return state.moves + 1;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  const obstacleAwareMoves = searchMinimumMoves(obstacleCenters());
+
+  if (obstacleAwareMoves !== null) {
+    return obstacleAwareMoves;
+  }
+
+  const openBoardMoves = searchMinimumMoves([]);
+
+  return openBoardMoves ?? Math.max(1, Math.ceil(collectPoints.length / assetNodes.length));
+}
+
 function resumeRotationAfterSettle() {
   window.clearTimeout(settleTimer);
   settleTimer = window.setTimeout(() => {
     assetNodes.forEach((node) => node.classList.remove("settling"));
+    triangleSettling = false;
+    consumePendingSpirals();
 
-    if (!draggedNode && !gameOver) {
+    if (!draggedNode && !gameOver && !levelComplete) {
       rotationPaused = false;
       lastRotationTime = null;
     }
@@ -918,7 +1391,7 @@ function rotateTriangle(now) {
   const elapsedSeconds = (now - lastRotationTime) / 1000;
   lastRotationTime = now;
 
-  if (!rotationPaused && !draggedNode) {
+  if (!gameOver && !levelComplete && !rotationPaused && !draggedNode) {
     const points = assetNodes.map(nodePoint);
     const center = triangleCenter(points);
     const angle = triangleRotationRadiansPerSecond * elapsedSeconds;
@@ -992,6 +1465,10 @@ function updateTriangleCenter(points = assetNodes.map(nodePoint)) {
 }
 
 function startAssetDrag(event) {
+  if (triangleSettling || levelComplete || gameOver) {
+    return;
+  }
+
   draggedNode = event.currentTarget.closest(".asset-node");
 
   if (!draggedNode) {
@@ -1027,6 +1504,10 @@ function stopAssetDrag() {
   draggedNode.classList.remove("dragging");
   draggedNode = null;
   draggedHandle = null;
+  playerMoves += 1;
+  window.halcyonPlayerMoves = playerMoves;
+  updateMoveHud();
+  triangleSettling = true;
   settleTriangleFromHypotenuse(releasedNode);
   dragStartPoints = null;
 }
@@ -1097,10 +1578,14 @@ function playTriangleVideo(index) {
 
       legsFade.finished.then(() => {
         window.setTimeout(() => {
-          rotationPaused = false;
+          if (!gameOver) {
+            rotationPaused = false;
+          }
         }, rotationStartDelay);
       }).catch(() => {
-        rotationPaused = false;
+        if (!gameOver) {
+          rotationPaused = false;
+        }
       });
       return;
     }
@@ -1171,6 +1656,11 @@ async function startGame(event) {
 
   event?.preventDefault();
   gameStarted = true;
+  playerMoves = 0;
+  levelComplete = false;
+  triangleSettling = false;
+  pendingCapturedSpirals.clear();
+  window.halcyonPlayerMoves = playerMoves;
   startScreen.classList.add("hidden");
   gameplay.classList.add("started", "active");
   baseTriangleSideLength = sideLengthFrom(assetNodes.map(nodePoint));
@@ -1179,6 +1669,9 @@ async function startGame(event) {
   await showLevelTitle();
   generateObstacles();
   generateSpiralSprite();
+  levelOneMinimumMoves = Math.floor(randomBetween(levelOneMinimumMoveLow, levelOneMinimumMoveHigh + 1));
+  window.halcyonLevelOneMinimumMoves = levelOneMinimumMoves;
+  updateMoveHud();
   updateTriangleLinks();
   requestAnimationFrame(() => {
     updateTriangleLinks();
@@ -1188,7 +1681,7 @@ async function startGame(event) {
 }
 
 gameplay.addEventListener("pointermove", (event) => {
-  if (!gameStarted || gameOver) {
+  if (!gameStarted || gameOver || levelComplete) {
     return;
   }
 
@@ -1205,7 +1698,7 @@ gameplay.addEventListener("pointermove", (event) => {
 });
 
 gameplay.addEventListener("touchmove", (event) => {
-  if (!gameStarted || gameOver) {
+  if (!gameStarted || gameOver || levelComplete) {
     return;
   }
 
@@ -1219,7 +1712,7 @@ gameplay.addEventListener("touchmove", (event) => {
 }, { passive: false });
 
 gameplay.addEventListener("click", () => {
-  if (!gameStarted || gameOver) {
+  if (!gameStarted || gameOver || levelComplete) {
     return;
   }
 

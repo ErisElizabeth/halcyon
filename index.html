@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600&display=swap" rel="stylesheet">
+    <link rel="preload" href="assets/explode.mp4" as="video" type="video/mp4">
     <style>
       html,
       body {
@@ -66,7 +67,7 @@
         touch-action: manipulation;
       }
     </style>
-    <link rel="stylesheet" href="styles.css?v=2026-05-05-9">
+    <link rel="stylesheet" href="styles.css?v=2026-05-05-19">
   </head>
   <body>
     <main class="shell" aria-label="halcyon">
@@ -113,11 +114,19 @@
         </div>
         <div class="cursor" aria-hidden="true"></div>
         <p id="hint" class="hint">click to enter</p>
+        <div class="move-hud" aria-hidden="true">
+          <div>minimum moves <span class="minimum-moves-value">0</span></div>
+          <div>player moves <span class="player-moves-value">0</span></div>
+        </div>
         <div class="game-over-screen" aria-live="polite">game over</div>
+        <div class="level-complete-screen" aria-live="polite">
+          <div>level complete</div>
+          <div class="score-line">score 0</div>
+        </div>
         <audio id="play-loop-audio" src="assets/audio/halcyon_play_loop.ogg" preload="auto" loop></audio>
         <audio id="lost-loop-audio" src="assets/audio/halcyon_lost_loop.ogg" preload="auto" loop></audio>
       </section>
     </main>
-    <script src="game.js?v=2026-05-05-9"></script>
+    <script src="game.js?v=2026-05-05-19"></script>
   </body>
 </html>

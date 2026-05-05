@@ -120,6 +120,7 @@ body {
 .gameplay:not(.started) .spiral-field,
 .gameplay:not(.started) .triangle-test,
 .gameplay:not(.started) .cursor,
+.gameplay:not(.started) .move-hud,
 .gameplay:not(.started) .hint {
   opacity: 0;
 }
@@ -313,6 +314,13 @@ body {
   opacity: 1;
 }
 
+.triangle-video.exploding {
+  opacity: 1;
+  animation: none;
+  mask-image: none;
+  -webkit-mask-image: none;
+}
+
 .asset-node-1 {
   left: 50%;
   top: calc(50% - var(--triangle-rise));
@@ -390,7 +398,23 @@ body {
   opacity: 0;
 }
 
-.game-over-screen {
+.move-hud {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  z-index: 4;
+  color: #D8DDD9;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.45;
+  opacity: 0.5;
+  pointer-events: none;
+  text-align: right;
+}
+
+.game-over-screen,
+.level-complete-screen {
   position: absolute;
   inset: 0;
   z-index: 5;
@@ -407,7 +431,18 @@ body {
   transition: opacity 0.35s ease;
 }
 
-.game-over-screen.visible {
+.level-complete-screen {
+  align-content: center;
+  gap: 0.75rem;
+  font-size: clamp(1.8rem, 6vmin, 4.8rem);
+}
+
+.score-line {
+  font-size: clamp(1.1rem, 3.2vmin, 2.2rem);
+}
+
+.game-over-screen.visible,
+.level-complete-screen.visible {
   opacity: 1;
 }
 
