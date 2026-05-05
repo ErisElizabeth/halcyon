@@ -50,6 +50,7 @@ const audioVolumes = {
   playLoop: 0.6,
   lostLoop: 0.72,
 };
+const elementLoopSeamPadding = 0.08;
 const supabaseUrl = "https://jurpddzoprhuboxyghau.supabase.co";
 const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp1cnBkZHpvcHJodWJveHlnaGF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NDcxNzUsImV4cCI6MjA5MzQyMzE3NX0.gAQAYN5Pizs5Hiet9hviGQ16Ph1MDif-uDs1mhFpJvA";
 const freezeOffsets = [0.2, 0.2, 0.02];
@@ -113,6 +114,8 @@ let playerMoves = 0;
 let levelComplete = false;
 const pendingCapturedSpirals = new Set();
 let activeAudio = audioElements.playLoop;
+let activeElementLoopName = "playLoop";
+let elementLoopFrame = null;
 let audioContext = null;
 let audioGain = null;
 let audioBuffers = null;
@@ -176,10 +179,76 @@ function playElementAudio(track) {
   return playback;
 }
 
+function elementLoopNameForTrack(track) {
+  return track === audioElements.lostLoop ? "lostLoop" : "playLoop";
+}
+
+function activeElementTrack() {
+  return audioElements[activeElementLoopName];
+}
+
+function stopElementLoopMonitor() {
+  window.cancelAnimationFrame(elementLoopFrame);
+  elementLoopFrame = null;
+}
+
+function monitorElementLoopSeam() {
+  stopElementLoopMonitor();
+
+  function tick() {
+    if (activeAudioMode !== "element" || !audioStarted) {
+      elementLoopFrame = null;
+      return;
+    }
+
+    const track = activeElementTrack();
+    const duration = track.duration;
+
+    if (
+      track
+      && !track.paused
+      && Number.isFinite(duration)
+      && duration > elementLoopSeamPadding * 2
+      && duration - track.currentTime <= elementLoopSeamPadding
+    ) {
+      track.currentTime = 0;
+    }
+
+    elementLoopFrame = window.requestAnimationFrame(tick);
+  }
+
+  elementLoopFrame = window.requestAnimationFrame(tick);
+}
+
+function playElementLoop(track, marker = track.currentTime || 0) {
+  const duration = track.duration || 0;
+
+  Object.values(audioElements).forEach((audioTrack) => {
+    if (audioTrack !== track) {
+      audioTrack.pause();
+    }
+  });
+
+  if (duration > 0) {
+    track.currentTime = marker % duration;
+  } else if (track.currentTime === 0) {
+    track.currentTime = 0;
+  }
+
+  track.volume = elementVolumeFor(track) * audioOutputScale;
+  activeAudioMode = "element";
+  activeAudio = track;
+  activeElementLoopName = elementLoopNameForTrack(track);
+  monitorElementLoopSeam();
+
+  return playElementAudio(track);
+}
+
 function markAudioStartFailedOnReject(playback) {
   playback?.catch(() => {
     if (activeAudioMode === "element" && !lostAudioStarted) {
       audioStarted = false;
+      stopElementLoopMonitor();
     }
   });
 }
@@ -303,6 +372,7 @@ function startWebAudioLoop(name, offset = 0) {
     return;
   }
 
+  stopElementLoopMonitor();
   const source = context.createBufferSource();
   const buffer = audioBuffers[name];
   const marker = buffer.duration > 0 ? offset % buffer.duration : 0;
@@ -331,16 +401,12 @@ function currentWebAudioMarker() {
 }
 
 function switchAudio(fromTrack, toTrack, time) {
-  fromTrack.pause();
   const duration = toTrack.duration || 0;
   const marker = toTrack.loop && duration > 0
     ? time % duration
     : Math.min(time, duration || time);
 
-  toTrack.currentTime = marker;
-  toTrack.volume = elementVolumeFor(toTrack) * audioOutputScale;
-  activeAudio = toTrack;
-  playElementAudio(toTrack);
+  playElementLoop(toTrack, marker);
 }
 
 async function startPlayAudio() {
@@ -351,11 +417,7 @@ async function startPlayAudio() {
   audioStarted = true;
 
   if (shouldUseElementAudioPath()) {
-    activeAudioMode = "element";
-    activeAudio = audioElements.playLoop;
-    audioElements.playLoop.currentTime = 0;
-    audioElements.playLoop.volume = audioVolumes.playLoop * audioOutputScale;
-    markAudioStartFailedOnReject(playElementAudio(audioElements.playLoop));
+    markAudioStartFailedOnReject(playElementLoop(audioElements.playLoop, 0));
     return;
   }
 
@@ -373,11 +435,7 @@ async function startPlayAudio() {
     // fall back to audio elements below
   }
 
-  activeAudioMode = "element";
-  activeAudio = audioElements.playLoop;
-  audioElements.playLoop.currentTime = 0;
-  audioElements.playLoop.volume = audioVolumes.playLoop * audioOutputScale;
-  markAudioStartFailedOnReject(playElementAudio(audioElements.playLoop));
+  markAudioStartFailedOnReject(playElementLoop(audioElements.playLoop, 0));
 }
 
 function switchToLostAudio() {

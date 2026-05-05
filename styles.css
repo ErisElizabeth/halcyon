@@ -238,7 +238,7 @@ body {
   --triangle-half: clamp(16px, 3.15vmin, 30px);
   --triangle-rise: calc(var(--triangle-half) * 1.1547);
   --triangle-drop: calc(var(--triangle-half) * 0.57735);
-  --capture-size: 23.375px;
+  --capture-size: 40px;
   --anchor-radius: var(--anchor-hit-radius);
   --asset-opaque-radius: calc(var(--anchor-radius) * 2.5);
   --asset-fade-radius: calc(var(--asset-opaque-radius) * 1.45);
