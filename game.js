@@ -427,56 +427,58 @@ function generateSpiralSprite() {
   const startArea = startAreaExclusion();
   const obstacleAvoidanceRadius = spiralObstacleAvoidanceDiameter / 2 + spiralSize / 2;
   const obstacles = obstacleCenters();
+  const candidates = [];
   const points = [];
 
-  for (let index = 0; index < spiralCount; index += 1) {
-    let point = null;
-    let bestFallback = null;
-    let bestFallbackScore = -Infinity;
+  for (let attempt = 0; attempt < 2500; attempt += 1) {
+    const candidate = {
+      x: randomBetween(obstacleEdgeMargin, Math.max(obstacleEdgeMargin, width - obstacleEdgeMargin)),
+      y: randomBetween(obstacleEdgeMargin, Math.max(obstacleEdgeMargin, height - obstacleEdgeMargin)),
+    };
+    const clearsStartArea = distanceBetween(candidate, startArea.center) > startArea.radius + obstacleSize;
+    const clearsObstacles = obstacles.every((obstacle) => (
+      distanceBetween(candidate, obstacle) >= obstacleAvoidanceRadius
+    ));
 
-    for (let attempt = 0; attempt < 800; attempt += 1) {
-      const candidate = {
-        x: randomBetween(obstacleEdgeMargin, Math.max(obstacleEdgeMargin, width - obstacleEdgeMargin)),
-        y: randomBetween(obstacleEdgeMargin, Math.max(obstacleEdgeMargin, height - obstacleEdgeMargin)),
-      };
-      const startAreaDistance = distanceBetween(candidate, startArea.center);
-      const nearestSpiralDistance = points.length > 0
+    if (clearsStartArea && clearsObstacles) {
+      candidates.push(candidate);
+    }
+  }
+
+  while (points.length < spiralCount && candidates.length > 0) {
+    const point = candidates.reduce((best, candidate) => {
+      const nearestDistance = points.length > 0
         ? Math.min(...points.map((existingPoint) => distanceBetween(candidate, existingPoint)))
-        : Infinity;
-      const clearsStartArea = startAreaDistance > startArea.radius + obstacleSize;
-      const clearsObstacles = obstacles.every((obstacle) => (
-        distanceBetween(candidate, obstacle) >= obstacleAvoidanceRadius
-      ));
-      const clearsSpirals = nearestSpiralDistance >= spiralSpacing;
-      const fallbackScore = startAreaDistance + nearestSpiralDistance;
+        : distanceBetween(candidate, startArea.center);
+      const bestNearestDistance = points.length > 0
+        ? Math.min(...points.map((existingPoint) => distanceBetween(best, existingPoint)))
+        : distanceBetween(best, startArea.center);
 
-      if (clearsStartArea && clearsObstacles && fallbackScore > bestFallbackScore) {
-        bestFallback = candidate;
-        bestFallbackScore = fallbackScore;
-      }
-
-      if (clearsStartArea && clearsObstacles && clearsSpirals) {
-        point = candidate;
-        break;
-      }
-    }
-
-    if (!point) {
-      point = bestFallback;
-    }
-
-    if (!point) {
-      continue;
-    }
+      return nearestDistance > bestNearestDistance ? candidate : best;
+    }, candidates[0]);
+    const pointIndex = candidates.indexOf(point);
 
     points.push(point);
+    candidates.splice(pointIndex, 1);
+  }
 
+  while (points.length < spiralCount) {
+    const fallbackAngle = points.length / spiralCount * 2 * Math.PI - Math.PI / 2;
+    const fallbackRadius = Math.min(width, height) * 0.36;
+
+    points.push({
+      x: clamp(startArea.center.x + Math.cos(fallbackAngle) * fallbackRadius, obstacleEdgeMargin, width - obstacleEdgeMargin),
+      y: clamp(startArea.center.y + Math.sin(fallbackAngle) * fallbackRadius, obstacleEdgeMargin, height - obstacleEdgeMargin),
+    });
+  }
+
+  points.forEach((point) => {
     const sprite = createSpiralSprite();
 
     sprite.style.left = `${point.x}px`;
     sprite.style.top = `${point.y}px`;
     spiralField.appendChild(sprite);
-  }
+  });
 }
 
 function obstacleCenters() {
