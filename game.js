@@ -15,14 +15,15 @@ function playableBounds() {
   const styles = getComputedStyle(gameplay);
   const left = Number.parseFloat(styles.borderLeftWidth);
   const top = Number.parseFloat(styles.borderTopWidth);
-  const right = Number.parseFloat(styles.borderRightWidth);
-  const bottom = Number.parseFloat(styles.borderBottomWidth);
+  const radius = cursor.offsetWidth / 2;
 
   return {
-    minX: left,
-    minY: top,
-    maxX: rect.width - right,
-    maxY: rect.height - bottom,
+    minX: radius,
+    minY: radius,
+    maxX: gameplay.clientWidth - radius,
+    maxY: gameplay.clientHeight - radius,
+    offsetX: left,
+    offsetY: top,
     rect,
   };
 }
@@ -46,7 +47,10 @@ gameplay.addEventListener("pointermove", (event) => {
   }
 
   const bounds = playableBounds();
-  moveCursor(event.clientX - bounds.rect.left, event.clientY - bounds.rect.top);
+  moveCursor(
+    event.clientX - bounds.rect.left - bounds.offsetX,
+    event.clientY - bounds.rect.top - bounds.offsetY,
+  );
 });
 
 gameplay.addEventListener("click", () => {
