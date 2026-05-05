@@ -1,11 +1,11 @@
 :root {
   color-scheme: light;
-  --background: #E8DCC6;
-  --border: #D8E2D0;
-  --corner-line: #565755;
-  --glow: #FFFDF4;
+  --background: #000000;
   --ink: #5e604f;
-  --bar: clamp(28px, 4.2vh, 42px);
+  --cursor-size: 14px;
+  --cursor-hit-size: 16.8px;
+  --cursor-glow-size: 18px;
+  --anchor-hit-radius: 3.5px;
 }
 
 * {
@@ -26,6 +26,7 @@ body {
 }
 
 .shell {
+  position: relative;
   width: 100vw;
   height: 100vh;
   background: var(--background);
@@ -37,52 +38,188 @@ body {
   height: 100%;
   overflow: hidden;
   cursor: none;
-  background: linear-gradient(180deg, rgba(255, 253, 244, 0.42), rgba(232, 220, 198, 0.08));
-  border: var(--bar) solid var(--border);
-  box-shadow:
-    0 24px 56px rgba(117, 104, 77, 0.24),
-    inset 0 0 42px 14px var(--glow),
-    inset 0 2px 0 rgba(255, 253, 244, 0.85),
-    inset 0 -2px 0 rgba(115, 128, 103, 0.18);
+  background: var(--background);
 }
 
-.gameplay::before {
-  content: "";
+.triangle-test {
   position: absolute;
-  inset: calc(-1 * var(--bar));
+  inset: 0;
+  z-index: 1;
   pointer-events: none;
-  box-shadow:
-    inset 0 6px 0 rgba(255, 253, 244, 0.72),
-    inset 0 -8px 0 rgba(116, 130, 103, 0.18),
-    inset 6px 0 0 rgba(255, 253, 244, 0.45),
-    inset -7px 0 0 rgba(116, 130, 103, 0.14);
+  --triangle-half: clamp(16px, 3.15vmin, 30px);
+  --triangle-rise: calc(var(--triangle-half) * 1.1547);
+  --triangle-drop: calc(var(--triangle-half) * 0.57735);
+  --capture-size: 23.375px;
+  --anchor-radius: var(--anchor-hit-radius);
+  --asset-opaque-radius: calc(var(--anchor-radius) * 2.5);
+  --asset-fade-radius: calc(var(--asset-opaque-radius) * 1.45);
+  --mask-shrink-duration: 1s;
 }
 
-.gameplay::after {
-  content: "";
+.obstacle-field {
   position: absolute;
-  inset: calc(-1 * var(--bar));
+  inset: 0;
+  z-index: 0;
+  opacity: 0;
   pointer-events: none;
+  transition: opacity 1.5s ease;
+}
+
+.obstacle-field.visible {
+  opacity: 1;
+}
+
+.obstacle {
+  position: absolute;
+  width: 16px;
+  height: 16px;
   background:
-    linear-gradient(135deg, transparent calc(50% - 1px), var(--corner-line) 50%, transparent calc(50% + 1px)) left top / var(--bar) var(--bar) no-repeat,
-    linear-gradient(225deg, transparent calc(50% - 1px), var(--corner-line) 50%, transparent calc(50% + 1px)) right top / var(--bar) var(--bar) no-repeat,
-    linear-gradient(45deg, transparent calc(50% - 1px), var(--corner-line) 50%, transparent calc(50% + 1px)) left bottom / var(--bar) var(--bar) no-repeat,
-    linear-gradient(315deg, transparent calc(50% - 1px), var(--corner-line) 50%, transparent calc(50% + 1px)) right bottom / var(--bar) var(--bar) no-repeat;
+    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.38), transparent 24%),
+    linear-gradient(var(--obstacle-highlight), rgba(255, 255, 255, 0.22), transparent 38%, rgba(0, 0, 68, 0.52)),
+    var(--obstacle-color, #0000D1);
+  translate: -50% -50%;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.32) inset,
+    0 -2px 2px rgba(0, 0, 50, 0.82) inset,
+    0 0 7px rgba(0, 56, 255, 0.66),
+    0 4px 8px rgba(0, 0, 0, 0.8);
+}
+
+.asset-node {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.asset-node.mask-tight {
+  --asset-opaque-radius: var(--anchor-radius);
+}
+
+.asset-node.dragging {
+  z-index: 2;
+}
+
+.asset-node.settling {
+  transition:
+    left 0.45s ease,
+    top 0.45s ease;
+}
+
+.triangle-links {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1.5s ease;
+}
+
+.triangle-links.visible {
+  opacity: 1;
+}
+
+.triangle-link {
+  stroke: #ff2f2f;
+  stroke-width: 2;
+  stroke-linecap: round;
+  filter: url("#link-glow");
+}
+
+.triangle-video {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: clamp(62px, 9.1vmin, 105px);
+  height: auto;
+  opacity: 0;
+  translate: -50% -50%;
+  transform-origin: center;
+  animation: asset-spin 20s linear infinite;
+  mask-image: radial-gradient(
+    circle at 50% 50%,
+    #000 0 var(--asset-opaque-radius),
+    transparent var(--asset-fade-radius)
+  );
+  -webkit-mask-image: radial-gradient(
+    circle at 50% 50%,
+    #000 0 var(--asset-opaque-radius),
+    transparent var(--asset-fade-radius)
+  );
+  transition:
+    --asset-opaque-radius var(--mask-shrink-duration) linear,
+    --asset-fade-radius var(--mask-shrink-duration) linear;
+  pointer-events: none;
+}
+
+@property --asset-opaque-radius {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 8.75px;
+}
+
+.triangle-video.active,
+.triangle-video.frozen {
+  opacity: 1;
+}
+
+.asset-node-1 {
+  left: 50%;
+  top: calc(50% - var(--triangle-rise));
+}
+
+.asset-node-2 {
+  left: calc(50% - var(--triangle-half));
+  top: calc(50% + var(--triangle-drop));
+}
+
+.asset-node-3 {
+  left: calc(50% + var(--triangle-half));
+  top: calc(50% + var(--triangle-drop));
+}
+
+.asset-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--capture-size);
+  height: var(--capture-size);
+  border-radius: 50%;
+  background: transparent;
+  translate: -50% -50%;
+  pointer-events: auto;
+}
+
+.triangle-center-anchor {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--capture-size);
+  height: var(--capture-size);
+  border-radius: 50%;
+  translate: -50% -50%;
+  pointer-events: none;
 }
 
 .cursor {
   position: absolute;
   left: 0;
   top: 0;
-  z-index: 2;
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--ink);
+  z-index: 4;
+  width: var(--cursor-size);
+  height: var(--cursor-size);
   border-radius: 50%;
+  background: #ffffff;
   translate: -50% -50%;
   pointer-events: none;
   opacity: 0;
-  box-shadow: 0 0 14px rgba(255, 253, 244, 0.9);
+  box-shadow: 0 0 calc((var(--cursor-glow-size) - var(--cursor-size)) / 2) calc((var(--cursor-glow-size) - var(--cursor-size)) / 2) rgba(255, 255, 255, 0.42);
 }
 
 .gameplay.active .cursor,
@@ -106,4 +243,31 @@ body {
 
 .gameplay.active .hint {
   opacity: 0;
+}
+
+.game-over-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  font-size: clamp(2rem, 8vmin, 6rem);
+  letter-spacing: 0;
+  opacity: 0;
+  pointer-events: none;
+  text-shadow:
+    0 0 12px rgba(255, 255, 255, 0.82),
+    0 0 32px rgba(255, 47, 47, 0.72);
+  transition: opacity 0.35s ease;
+}
+
+.game-over-screen.visible {
+  opacity: 1;
+}
+
+@keyframes asset-spin {
+  to {
+    rotate: 360deg;
+  }
 }

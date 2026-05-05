@@ -9,8 +9,43 @@
   <body>
     <main class="shell" aria-label="halcyon">
       <section id="gameplay" class="gameplay" aria-label="gameplay area">
+        <div class="obstacle-field" aria-hidden="true"></div>
+        <div class="triangle-test">
+          <svg class="triangle-links" aria-hidden="true">
+            <defs>
+              <filter id="link-glow" x="-2000" y="-2000" width="4000" height="4000" filterUnits="userSpaceOnUse">
+                <feGaussianBlur stdDeviation="7" result="wide-glow"></feGaussianBlur>
+                <feFlood flood-color="#ff2f2f" flood-opacity="0.75" result="glow-color"></feFlood>
+                <feComposite in="glow-color" in2="wide-glow" operator="in" result="colored-glow"></feComposite>
+                <feGaussianBlur stdDeviation="2" result="soft-glow"></feGaussianBlur>
+                <feMerge>
+                  <feMergeNode in="colored-glow"></feMergeNode>
+                  <feMergeNode in="soft-glow"></feMergeNode>
+                  <feMergeNode in="SourceGraphic"></feMergeNode>
+                </feMerge>
+              </filter>
+            </defs>
+            <line class="triangle-link triangle-link-1"></line>
+            <line class="triangle-link triangle-link-2"></line>
+            <line class="triangle-link triangle-link-3"></line>
+          </svg>
+          <div class="asset-node asset-node-1" aria-hidden="true">
+            <video class="triangle-video triangle-video-1" src="assets/timeline-2.mp4" muted playsinline preload="auto"></video>
+            <div class="asset-handle"></div>
+          </div>
+          <div class="asset-node asset-node-2" aria-hidden="true">
+            <video class="triangle-video triangle-video-2" src="assets/timeline-2.mp4" muted playsinline preload="auto"></video>
+            <div class="asset-handle"></div>
+          </div>
+          <div class="asset-node asset-node-3" aria-hidden="true">
+            <video class="triangle-video triangle-video-3" src="assets/timeline-2.mp4" muted playsinline preload="auto"></video>
+            <div class="asset-handle"></div>
+          </div>
+          <div class="triangle-center-anchor" aria-hidden="true"></div>
+        </div>
         <div class="cursor" aria-hidden="true"></div>
         <p id="hint" class="hint">click to enter</p>
+        <div class="game-over-screen" aria-live="polite">game over</div>
       </section>
     </main>
     <script src="game.js"></script>
