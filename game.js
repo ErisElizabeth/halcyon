@@ -2611,6 +2611,12 @@ function showLevelTitle(generation) {
 }
 
 async function startGame(event) {
+  if (event) {
+    startPlayAudio().catch((error) => {
+      console.warn("Could not start play audio from Play gesture:", error);
+    });
+  }
+ 
   await runTransition("fresh", event);
 }
 
