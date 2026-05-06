@@ -169,11 +169,7 @@ function chooseAudioSource(options) {
 }
 
 function shouldUseElementAudioPath() {
-  return !(window.AudioContext || window.webkitAudioContext);
-}
-
-function isMobileAudioPath() {
-  return window.matchMedia?.("(pointer: coarse)")?.matches;
+  return window.matchMedia?.("(pointer: coarse)")?.matches || audioFiles.playLoop.endsWith(".mp3");
 }
 
 function playElementAudio(track) {
@@ -475,24 +471,6 @@ function switchToPlayAudio() {
 function handleAudioVisibilityChange() {
   if (document.hidden) {
     fadeAudioOutput(0);
-    return;
-  }
-
-  if (audioContext?.state === "suspended") {
-    audioContext.resume().catch(() => {});
-  }
-
-  fadeAudioOutput(1);
-}
-
-function handleMobileAudioHidden() {
-  if (isMobileAudioPath()) {
-    fadeAudioOutput(0);
-  }
-}
-
-function handleMobileAudioVisible() {
-  if (!isMobileAudioPath()) {
     return;
   }
 
@@ -2633,11 +2611,6 @@ function showLevelTitle(generation) {
 }
 
 async function startGame(event) {
-  if (isMobileAudioPath()) {
-    event?.preventDefault();
-    await startPlayAudio();
-  }
-
   await runTransition("fresh", event);
 }
 
@@ -2722,10 +2695,6 @@ document.addEventListener("pointermove", (event) => {
 document.addEventListener("pointerdown", retryPlayAudioFromGesture, { passive: true });
 document.addEventListener("touchstart", retryPlayAudioFromGesture, { passive: true });
 document.addEventListener("visibilitychange", handleAudioVisibilityChange);
-window.addEventListener("pagehide", handleMobileAudioHidden);
-window.addEventListener("blur", handleMobileAudioHidden);
-window.addEventListener("pageshow", handleMobileAudioVisible);
-window.addEventListener("focus", handleMobileAudioVisible);
 assetNodes.forEach((node) => {
   const handle = node.querySelector(".asset-handle");
 
