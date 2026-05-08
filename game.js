@@ -28,29 +28,28 @@ const triangleVideos = [...document.querySelectorAll(".triangle-video")];
 const assetNodes = [...document.querySelectorAll(".asset-node")];
 const triangleLinks = [...document.querySelectorAll(".triangle-link")];
 const triangleCenterAnchor = document.querySelector(".triangle-center-anchor");
-const audioElements = {
-  playLoop: document.querySelector("#play-loop-audio"),
-  lostLoop: document.querySelector("#lost-loop-audio"),
-};
-const audioSourceOptions = {
-  playLoop: [
-    { url: "assets/audio/halcyon_play_loop.ogg", type: "audio/ogg" },
-    { url: "assets/audio/halcyon_play_loop.mp3", type: "audio/mpeg" },
-  ],
-  lostLoop: [
-    { url: "assets/audio/halcyon_lost_loop.ogg", type: "audio/ogg" },
-    { url: "assets/audio/halcyon_lost_loop.mp3", type: "audio/mpeg" },
-  ],
-};
-const audioFiles = {
-  playLoop: chooseAudioSource(audioSourceOptions.playLoop),
-  lostLoop: chooseAudioSource(audioSourceOptions.lostLoop),
-};
-const audioVolumes = {
-  playLoop: 0.6,
-  lostLoop: 0.72,
-};
-const elementLoopSeamPadding = 0.08;
+const music = new GaplessMusicController({
+  initialMode: "play",
+  fadeSeconds: 0.22,
+  modes: {
+    play: {
+      volume: 0.6,
+      intro: { url: "assets/audio/halcyon_play_intro.mp3", type: "audio/mpeg" },
+      loop: [
+        { url: "assets/audio/halcyon_play_loop.ogg", type: "audio/ogg" },
+        { url: "assets/audio/halcyon_play_loop.mp3", type: "audio/mpeg" },
+      ],
+    },
+    lost: {
+      volume: 0.72,
+      intro: { url: "assets/audio/halcyon_lost_intro.mp3", type: "audio/mpeg" },
+      loop: [
+        { url: "assets/audio/halcyon_lost_loop.ogg", type: "audio/ogg" },
+        { url: "assets/audio/halcyon_lost_loop.mp3", type: "audio/mpeg" },
+      ],
+    },
+  },
+});
 const supabaseUrl = "https://jurpddzoprhuboxyghau.supabase.co";
 const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp1cnBkZHpvcHJodWJveHlnaGF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NDcxNzUsImV4cCI6MjA5MzQyMzE3NX0.gAQAYN5Pizs5Hiet9hviGQ16Ph1MDif-uDs1mhFpJvA";
 const freezeOffsets = [0.2, 0.2, 0.02];
@@ -113,18 +112,6 @@ let levelOneMinimumMoves = null;
 let playerMoves = 0;
 let levelComplete = false;
 const pendingCapturedSpirals = new Set();
-let activeAudio = audioElements.playLoop;
-let activeElementLoopName = "playLoop";
-let elementLoopFrame = null;
-let audioContext = null;
-let audioGain = null;
-let audioBuffers = null;
-let audioBuffersPromise = null;
-let activeAudioSource = null;
-let activeAudioMode = "element";
-let webAudioLoopName = "playLoop";
-let webAudioLoopStartedAt = 0;
-let webAudioLoopOffset = 0;
 let currentLevel = 1;
 let closeCallTimer = null;
 let pendingCloseCall = false;
@@ -135,8 +122,6 @@ let gameOverLeaderboardStarted = false;
 let qualifyingHighScoreRank = null;
 let showNameEntry = false;
 let supabaseClient = null;
-let audioOutputScale = 1;
-let elementFadeFrame = null;
 let triangleReady = false;
 let restartTimer = null;
 let gameOverCleanupStarted = false;
@@ -148,265 +133,8 @@ let rotationLoopStarted = false;
 let visualGeneration = 0;
 const collisionTestKeys = new Set();
 
-Object.entries(audioElements).forEach(([name, track]) => {
-  track.src = audioFiles[name];
-  track.volume = audioVolumes[name];
-  track.load();
-});
-
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
-}
-
-function supportsAudioType(type) {
-  const tester = document.createElement("audio");
-
-  return tester.canPlayType(type) !== "";
-}
-
-function chooseAudioSource(options) {
-  return options.find((option) => supportsAudioType(option.type))?.url || options[0].url;
-}
-
-function shouldUseElementAudioPath() {
-  return window.matchMedia?.("(pointer: coarse)")?.matches || audioFiles.playLoop.endsWith(".mp3");
-}
-
-function playElementAudio(track) {
-  const playback = track.play();
-
-  playback?.catch(() => {});
-  return playback;
-}
-
-function elementLoopNameForTrack(track) {
-  return track === audioElements.lostLoop ? "lostLoop" : "playLoop";
-}
-
-function activeElementTrack() {
-  return audioElements[activeElementLoopName];
-}
-
-function stopElementLoopMonitor() {
-  window.cancelAnimationFrame(elementLoopFrame);
-  elementLoopFrame = null;
-}
-
-function monitorElementLoopSeam() {
-  stopElementLoopMonitor();
-
-  function tick() {
-    if (activeAudioMode !== "element" || !audioStarted) {
-      elementLoopFrame = null;
-      return;
-    }
-
-    const track = activeElementTrack();
-    const duration = track.duration;
-
-    if (
-      track
-      && !track.paused
-      && Number.isFinite(duration)
-      && duration > elementLoopSeamPadding * 2
-      && duration - track.currentTime <= elementLoopSeamPadding
-    ) {
-      track.currentTime = 0;
-    }
-
-    elementLoopFrame = window.requestAnimationFrame(tick);
-  }
-
-  elementLoopFrame = window.requestAnimationFrame(tick);
-}
-
-function playElementLoop(track, marker = track.currentTime || 0) {
-  const duration = track.duration || 0;
-
-  Object.values(audioElements).forEach((audioTrack) => {
-    if (audioTrack !== track) {
-      audioTrack.pause();
-    }
-  });
-
-  if (duration > 0) {
-    track.currentTime = marker % duration;
-  } else if (track.currentTime === 0) {
-    track.currentTime = 0;
-  }
-
-  track.volume = elementVolumeFor(track) * audioOutputScale;
-  activeAudioMode = "element";
-  activeAudio = track;
-  activeElementLoopName = elementLoopNameForTrack(track);
-  monitorElementLoopSeam();
-
-  return playElementAudio(track);
-}
-
-function markAudioStartFailedOnReject(playback) {
-  playback?.catch(() => {
-    if (activeAudioMode === "element" && !lostAudioStarted) {
-      audioStarted = false;
-      stopElementLoopMonitor();
-    }
-  });
-}
-
-function elementVolumeFor(track) {
-  return track === audioElements.lostLoop
-    ? audioVolumes.lostLoop
-    : audioVolumes.playLoop;
-}
-
-function setElementAudioScale(scale) {
-  Object.values(audioElements).forEach((track) => {
-    track.volume = elementVolumeFor(track) * scale;
-  });
-}
-
-function setWebAudioVolume(name, scale) {
-  if (!audioContext || !audioGain) {
-    return;
-  }
-
-  audioGain.gain.cancelScheduledValues(audioContext.currentTime);
-  audioGain.gain.setValueAtTime(audioVolumes[name] * scale, audioContext.currentTime);
-}
-
-function fadeElementAudioScale(startScale, targetScale, duration) {
-  window.cancelAnimationFrame(elementFadeFrame);
-
-  const startTime = performance.now();
-
-  function tick(now) {
-    const progress = duration > 0 ? clamp((now - startTime) / duration, 0, 1) : 1;
-    const nextScale = startScale + (targetScale - startScale) * progress;
-
-    setElementAudioScale(nextScale);
-
-    if (progress < 1) {
-      elementFadeFrame = window.requestAnimationFrame(tick);
-    }
-  }
-
-  elementFadeFrame = window.requestAnimationFrame(tick);
-}
-
-function fadeAudioOutput(targetScale, duration = 2000) {
-  const startScale = audioOutputScale;
-
-  audioOutputScale = targetScale;
-
-  if (activeAudioMode === "web" && audioContext && audioGain) {
-    const now = audioContext.currentTime;
-
-    audioGain.gain.cancelScheduledValues(now);
-    audioGain.gain.setValueAtTime(audioVolumes[webAudioLoopName] * startScale, now);
-    audioGain.gain.linearRampToValueAtTime(audioVolumes[webAudioLoopName] * targetScale, now + duration / 1000);
-  }
-
-  fadeElementAudioScale(startScale, targetScale, duration);
-}
-
-function ensureAudioContext() {
-  if (!audioContext) {
-    const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
-
-    if (!AudioContextConstructor) {
-      return null;
-    }
-
-    audioContext = new AudioContextConstructor();
-    audioGain = audioContext.createGain();
-    audioGain.gain.value = audioVolumes.playLoop * audioOutputScale;
-    audioGain.connect(audioContext.destination);
-  }
-
-  return audioContext;
-}
-
-function loadAudioBuffers() {
-  const context = ensureAudioContext();
-
-  if (!context) {
-    return Promise.resolve(null);
-  }
-
-  if (!audioBuffersPromise) {
-    audioBuffersPromise = Promise.all(
-      Object.entries(audioFiles).map(async ([name, url]) => {
-        const response = await fetch(url);
-        const data = await response.arrayBuffer();
-        const buffer = await context.decodeAudioData(data);
-
-        return [name, buffer];
-      }),
-    ).then((entries) => {
-      audioBuffers = Object.fromEntries(entries);
-      return audioBuffers;
-    }).catch(() => null);
-  }
-
-  return audioBuffersPromise;
-}
-
-function stopWebAudioLoop() {
-  if (!activeAudioSource) {
-    return;
-  }
-
-  try {
-    activeAudioSource.stop();
-  } catch {
-    // source may already be stopped
-  }
-
-  activeAudioSource = null;
-}
-
-function startWebAudioLoop(name, offset = 0) {
-  const context = ensureAudioContext();
-
-  if (!context) {
-    return;
-  }
-
-  stopElementLoopMonitor();
-  const source = context.createBufferSource();
-  const buffer = audioBuffers[name];
-  const marker = buffer.duration > 0 ? offset % buffer.duration : 0;
-
-  stopWebAudioLoop();
-  setWebAudioVolume(name, audioOutputScale);
-  source.buffer = buffer;
-  source.loop = true;
-  source.connect(audioGain);
-  source.start(context.currentTime + 0.01, marker);
-  activeAudioSource = source;
-  activeAudioMode = "web";
-  webAudioLoopName = name;
-  webAudioLoopStartedAt = context.currentTime + 0.01;
-  webAudioLoopOffset = marker;
-}
-
-function currentWebAudioMarker() {
-  const buffer = audioBuffers?.[webAudioLoopName];
-
-  if (!audioContext || !buffer) {
-    return 0;
-  }
-
-  return (audioContext.currentTime - webAudioLoopStartedAt + webAudioLoopOffset) % buffer.duration;
-}
-
-function switchAudio(fromTrack, toTrack, time) {
-  const duration = toTrack.duration || 0;
-  const marker = toTrack.loop && duration > 0
-    ? time % duration
-    : Math.min(time, duration || time);
-
-  playElementLoop(toTrack, marker);
 }
 
 async function startPlayAudio() {
@@ -415,27 +143,8 @@ async function startPlayAudio() {
   }
 
   audioStarted = true;
-
-  if (shouldUseElementAudioPath()) {
-    markAudioStartFailedOnReject(playElementLoop(audioElements.playLoop, 0));
-    return;
-  }
-
-  try {
-    const context = ensureAudioContext();
-
-    await context.resume();
-    await loadAudioBuffers();
-
-    if (audioBuffers) {
-      startWebAudioLoop("playLoop", 0);
-      return;
-    }
-  } catch {
-    // fall back to audio elements below
-  }
-
-  markAudioStartFailedOnReject(playElementLoop(audioElements.playLoop, 0));
+  const ok = await music.start("play");
+  if (!ok && !lostAudioStarted) audioStarted = false;
 }
 
 function switchToLostAudio() {
@@ -444,13 +153,7 @@ function switchToLostAudio() {
   }
 
   lostAudioStarted = true;
-
-  if (activeAudioMode === "web" && audioBuffers) {
-    startWebAudioLoop("lostLoop", currentWebAudioMarker());
-    return;
-  }
-
-  switchAudio(activeAudio, audioElements.lostLoop, activeAudio.currentTime || 0);
+  music.switchMode("lost");
 }
 
 function switchToPlayAudio() {
@@ -459,26 +162,17 @@ function switchToPlayAudio() {
   }
 
   lostAudioStarted = false;
-
-  if (activeAudioMode === "web" && audioBuffers) {
-    startWebAudioLoop("playLoop", currentWebAudioMarker());
-    return;
-  }
-
-  switchAudio(audioElements.lostLoop, audioElements.playLoop, audioElements.lostLoop.currentTime || 0);
+  music.switchMode("play");
 }
 
 function handleAudioVisibilityChange() {
   if (document.hidden) {
-    fadeAudioOutput(0);
+    music.fadeTo(0);
     return;
   }
 
-  if (audioContext?.state === "suspended") {
-    audioContext.resume().catch(() => {});
-  }
-
-  fadeAudioOutput(1);
+  music.resumeContext();
+  music.fadeTo(1);
 }
 
 function retryPlayAudioFromGesture() {
@@ -2611,12 +2305,6 @@ function showLevelTitle(generation) {
 }
 
 async function startGame(event) {
-  if (event) {
-    startPlayAudio().catch((error) => {
-      console.warn("Could not start play audio from Play gesture:", error);
-    });
-  }
- 
   await runTransition("fresh", event);
 }
 
